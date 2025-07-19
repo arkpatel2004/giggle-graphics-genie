@@ -2,41 +2,65 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* Meme Creator Design System - Vibrant and Fun */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Main Brand Colors */
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    /* Card Variants */
+    --card: 240 8% 6%;
+    --card-foreground: 0 0% 98%;
+    --card-hover: 240 8% 8%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    /* Interactive Elements */
+    --popover: 240 8% 6%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Primary Brand - Electric Purple */
+    --primary: 270 91% 65%;
+    --primary-foreground: 0 0% 98%;
+    --primary-hover: 270 91% 70%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Secondary - Neon Green */
+    --secondary: 142 76% 36%;
+    --secondary-foreground: 0 0% 98%;
+    --secondary-hover: 142 76% 40%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Accent - Hot Pink */
+    --accent: 328 86% 70%;
+    --accent-foreground: 0 0% 98%;
+    --accent-hover: 328 86% 75%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Muted Elements */
+    --muted: 240 4% 16%;
+    --muted-foreground: 240 5% 64.9%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* Warning/Destructive */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    /* Borders and Inputs */
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 270 91% 65%;
 
-    --radius: 0.5rem;
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(270 91% 65%), hsl(328 86% 70%));
+    --gradient-secondary: linear-gradient(135deg, hsl(142 76% 36%), hsl(171 76% 36%));
+    --gradient-accent: linear-gradient(135deg, hsl(328 86% 70%), hsl(270 91% 65%));
+    --gradient-card: linear-gradient(135deg, hsl(240 8% 6%), hsl(240 8% 8%));
+
+    /* Shadows */
+    --shadow-primary: 0 10px 30px -5px hsl(270 91% 65% / 0.3);
+    --shadow-secondary: 0 10px 30px -5px hsl(142 76% 36% / 0.3);
+    --shadow-card: 0 4px 20px -2px hsl(240 8% 4% / 0.4);
+    --shadow-glow: 0 0 20px hsl(270 91% 65% / 0.5);
+
+    /* Border Radius */
+    --radius: 0.75rem;
 
     --sidebar-background: 0 0% 98%;
 
@@ -101,5 +125,53 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  /* Custom Component Styles */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 hover:shadow-lg hover:scale-105;
+  }
+
+  .glow-effect {
+    box-shadow: var(--shadow-glow);
+  }
+
+  .template-card {
+    @apply bg-card hover:bg-card-hover transition-all duration-300 rounded-xl border border-border;
+    box-shadow: var(--shadow-card);
+  }
+
+  .template-card:hover {
+    box-shadow: var(--shadow-primary);
+    transform: translateY(-2px);
+  }
+
+  .btn-gradient {
+    background: var(--gradient-primary);
+    @apply hover:opacity-90 transition-opacity duration-300;
+  }
+
+  .btn-secondary-gradient {
+    background: var(--gradient-secondary);
+    @apply hover:opacity-90 transition-opacity duration-300;
+  }
+
+  .sidebar-item {
+    @apply flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200;
+  }
+
+  .sidebar-item:hover {
+    @apply bg-muted;
+  }
+
+  .sidebar-item.active {
+    background: var(--gradient-primary);
+    @apply text-primary-foreground;
   }
 }
