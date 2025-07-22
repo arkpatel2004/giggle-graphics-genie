@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { TemplateEditor } from "./TemplateEditor";
+import { TemplateCreator } from "./TemplateCreator";
 
 interface AdminPanelProps {
   onClose: () => void;
@@ -51,9 +51,9 @@ export const AdminPanel = ({ onClose }: AdminPanelProps) => {
     }
   };
 
-  // If authenticated, show the template editor
+  // If authenticated, show the template creator
   if (isAuthenticated) {
-    return <TemplateEditor onClose={onClose} />;
+    return <TemplateCreator onClose={onClose} />;
   }
 
   // Otherwise show the login form

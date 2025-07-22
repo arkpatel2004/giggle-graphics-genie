@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TemplateGrid } from "./TemplateGrid";
 import { MemeEditor } from "./MemeEditor";
-import { AdminPanel } from "./AdminPanel";
+import { TemplateCreator } from "./TemplateCreator";
 
 export interface Template {
   id: string;
@@ -15,7 +15,7 @@ export interface Template {
 export const Dashboard = () => {
   const [activeTab, setActiveTab] = useState<'photo' | 'video'>('photo');
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showTemplateCreator, setShowTemplateCreator] = useState(false);
 
   const handleEditTemplate = (template: Template) => {
     setSelectedTemplate(template);
@@ -26,11 +26,11 @@ export const Dashboard = () => {
   };
 
   const handleCreateTemplate = () => {
-    setShowAdminPanel(true);
+    setShowTemplateCreator(true);
   };
 
-  const handleCloseAdminPanel = () => {
-    setShowAdminPanel(false);
+  const handleCloseTemplateCreator = () => {
+    setShowTemplateCreator(false);
   };
 
   return (
@@ -59,9 +59,9 @@ export const Dashboard = () => {
         </main>
       </div>
 
-      {/* Admin Panel Modal */}
-      {showAdminPanel && (
-        <AdminPanel onClose={handleCloseAdminPanel} />
+      {/* Template Creator Modal */}
+      {showTemplateCreator && (
+        <TemplateCreator onClose={handleCloseTemplateCreator} />
       )}
     </div>
   );
