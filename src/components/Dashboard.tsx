@@ -35,29 +35,27 @@ export const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="flex">
-        {/* Sidebar */}
-        <Sidebar 
-          activeTab={activeTab} 
-          onTabChange={setActiveTab}
-          onCreateTemplate={handleCreateTemplate}
-        />
-        
-        {/* Main Content */}
-        <main className="flex-1 p-6">
-          {selectedTemplate ? (
-            <MemeEditor 
-              template={selectedTemplate} 
-              onBack={handleBackToGrid}
-            />
-          ) : (
-            <TemplateGrid 
-              type={activeTab} 
-              onEditTemplate={handleEditTemplate}
-            />
-          )}
-        </main>
-      </div>
+      {/* Sidebar */}
+      <Sidebar 
+        activeTab={activeTab} 
+        onTabChange={setActiveTab}
+        onCreateTemplate={handleCreateTemplate}
+      />
+      
+      {/* Main Content */}
+      <main className="ml-16 p-6 min-h-screen">
+        {selectedTemplate ? (
+          <MemeEditor 
+            template={selectedTemplate} 
+            onBack={handleBackToGrid}
+          />
+        ) : (
+          <TemplateGrid 
+            type={activeTab} 
+            onEditTemplate={handleEditTemplate}
+          />
+        )}
+      </main>
 
       {/* Template Creator Modal */}
       {showTemplateCreator && (
