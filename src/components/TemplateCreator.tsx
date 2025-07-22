@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Upload, Type, Square, Circle, Download, Save, User, Lock } from "lucide-react";
+import { X, Upload, Type, Square, Circle, Download, Save, User, Lock, Trash2, AlignLeft, Layers, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,54 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Canvas as FabricCanvas, Rect, Circle as FabricCircle, Textbox, FabricImage } from "fabric";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+const FONT_OPTIONS = [
+  "Arial", "Arial Black", "Comic Sans MS", "Courier New", "Georgia", "Impact", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana"
+];
+
+function getElementTypeIcon(type: string) {
+  if (type === "textbox") return <AlignLeft className="w-4 h-4" />;
+  if (type === "rect") return <Square className="w-4 h-4" />;
+  if (type === "circle") return <Circle className="w-4 h-4" />;
+  if (type === "image") return <ImageIcon className="w-4 h-4" />;
+  return <Layers className="w-4 h-4" />;
+}
+
+function getElementLabel(obj: any) {
+  if (obj.type === "textbox") return "Text";
+  if (obj.type === "rect") return "Box";
+  if (obj.type === "circle") return "Circle";
+  if (obj.type === "image") return obj?.src?.split("/").pop() || "Image";
+  return obj.type;
+}
+
+function SortableElementItem({ id, obj, isActive, onSelect }: any) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    background: isActive ? "var(--accent)" : "var(--card)",
+    border: isActive ? "2px solid var(--primary)" : "1px solid var(--border)",
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 8,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    cursor: "grab",
+    boxShadow: isDragging ? "0 2px 8px rgba(0,0,0,0.08)" : undefined,
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners} onClick={() => onSelect(obj)}>
+      {getElementTypeIcon(obj.type)}
+      <span className="text-xs font-medium text-muted-foreground">{getElementLabel(obj)}</span>
+    </div>
+  );
+}
 
 interface TemplateCreatorProps {
   onClose: () => void;
@@ -26,6 +74,13 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   const [adminUsername, setAdminUsername] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminLoading, setAdminLoading] = useState(false);
+  const [selectedObject, setSelectedObject] = useState<any>(null);
+  const [color, setColor] = useState("#000000");
+  const [font, setFont] = useState(FONT_OPTIONS[0]);
+  const [elements, setElements] = useState<any[]>([]); // Track z-order
+
+  // DnD-kit setup
+  const sensors = useSensors(useSensor(PointerSensor));
 
   // Instagram post ratio: 1:1 (1080x1080), Reel ratio: 9:16 (1080x1920)
   const getCanvasDimensions = () => {
@@ -37,20 +92,130 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
 
   useEffect(() => {
     if (!canvasRef.current) return;
-
     const dimensions = getCanvasDimensions();
     const canvas = new FabricCanvas(canvasRef.current, {
       width: dimensions.width,
       height: dimensions.height,
       backgroundColor: "#ffffff",
     });
-
     setFabricCanvas(canvas);
-
+    // Selection event listeners
+    canvas.on("selection:created", (e) => {
+      setSelectedObject(e.selected?.[0] || null);
+    });
+    canvas.on("selection:updated", (e) => {
+      setSelectedObject(e.selected?.[0] || null);
+    });
+    canvas.on("selection:cleared", () => {
+      setSelectedObject(null);
+    });
+    // Track all elements on canvas
+    canvas.on("object:added", () => {
+      setElements([...canvas.getObjects()]);
+    });
+    canvas.on("object:removed", () => {
+      setElements([...canvas.getObjects()]);
+    });
+    canvas.on("object:modified", () => {
+      setElements([...canvas.getObjects()]);
+    });
     return () => {
       canvas.dispose();
     };
   }, [templateType]);
+
+  // Keep elements in sync if canvas changes
+  useEffect(() => {
+    if (fabricCanvas) setElements([...fabricCanvas.getObjects()]);
+  }, [fabricCanvas]);
+
+  // Update color/font state when object is selected
+  useEffect(() => {
+    if (!selectedObject) return;
+    if (selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") {
+      setColor(selectedObject.fill || "#000000");
+    }
+    if (selectedObject.type === "textbox") {
+      setFont(selectedObject.fontFamily || FONT_OPTIONS[0]);
+    }
+  }, [selectedObject]);
+
+  // Multi-image upload handler
+  const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !fabricCanvas) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string;
+        FabricImage.fromURL(imageUrl).then((img: any) => {
+          img.set({ left: 50, top: 50, scaleX: 0.5, scaleY: 0.5 });
+          fabricCanvas.add(img);
+          fabricCanvas.setActiveObject(img);
+          setElements([...fabricCanvas.getObjects()]);
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  // Delete selected object
+  const handleDelete = () => {
+    if (fabricCanvas && selectedObject) {
+      fabricCanvas.remove(selectedObject);
+      setSelectedObject(null);
+      fabricCanvas.discardActiveObject();
+      fabricCanvas.requestRenderAll();
+      setElements([...fabricCanvas.getObjects()]);
+    }
+  };
+
+  // Change color of selected object
+  const handleColorChange = (newColor: string) => {
+    setColor(newColor);
+    if (selectedObject && (selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle")) {
+      selectedObject.set({ fill: newColor });
+      if (fabricCanvas) fabricCanvas.requestRenderAll();
+    }
+  };
+
+  // Change font of selected text
+  const handleFontChange = (value: string) => {
+    setFont(value);
+    if (selectedObject && selectedObject.type === "textbox") {
+      selectedObject.set({ fontFamily: value });
+      if (fabricCanvas) fabricCanvas.requestRenderAll();
+    }
+  };
+
+  // DnD reorder handler
+  const handleDragEnd = (event: any) => {
+    const { active, over } = event;
+    if (active.id !== over?.id) {
+      const oldIndex = elements.findIndex((el) => el.__uid === active.id);
+      const newIndex = elements.findIndex((el) => el.__uid === over.id);
+      const newElements = arrayMove(elements, oldIndex, newIndex);
+      setElements(newElements);
+      // Reorder objects on canvas
+      if (fabricCanvas) {
+        newElements.forEach((obj, idx) => {
+          fabricCanvas.bringObjectToFront(obj); // ✅ Correct method
+        });
+        fabricCanvas.renderAll();
+      }
+    }
+  };
+
+
+  // Assign unique IDs to elements for DnD
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    fabricCanvas.getObjects().forEach((obj: any, idx: number) => {
+      if (!obj.__uid) obj.__uid = `${obj.type}-${idx}-${Date.now()}`;
+    });
+    setElements([...fabricCanvas.getObjects()]);
+  }, [fabricCanvas, elements.length]);
 
   const handleBackgroundUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -276,11 +441,53 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-card rounded-xl border border-border w-full max-w-6xl h-[90vh] flex flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-border">
-            <h2 className="text-xl font-bold">Create Template</h2>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              <X className="w-4 h-4" />
-            </Button>
+          <div className="flex flex-col gap-2 p-6 border-b border-border">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Create Template</h2>
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            {/* Advanced element options toolbar */}
+            {selectedObject && (
+              <div className="flex items-center gap-4 py-2 px-4 rounded-lg border bg-muted/50 shadow-sm">
+                <Button variant="ghost" size="icon" onClick={handleDelete} title="Delete">
+                  <Trash2 className="w-5 h-5 text-destructive" />
+                </Button>
+                {(selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Color</span>
+                    <button
+                      className="w-6 h-6 rounded border border-border flex items-center justify-center"
+                      style={{ background: color }}
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'color';
+                        input.value = color;
+                        input.oninput = (e: any) => handleColorChange(e.target.value);
+                        input.click();
+                      }}
+                      title="Change Color"
+                    />
+                  </div>
+                )}
+                {selectedObject.type === "textbox" && (
+                  <div className="flex items-center gap-2">
+                    <AlignLeft className="w-5 h-5 text-muted-foreground" />
+                    <Select value={font} onValueChange={handleFontChange}>
+                      <SelectTrigger className="w-24 h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {FONT_OPTIONS.map((f) => (
+                          <SelectItem key={f} value={f}>{f}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-1 overflow-hidden">
@@ -314,22 +521,23 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                   </div>
                 </div>
 
-                {/* Background Upload */}
+                {/* Multi-Image Upload */}
                 <div>
-                  <Label>Background {templateType === 'video' ? 'Video' : 'Image'}</Label>
+                  <Label>Upload Images (as elements)</Label>
                   <div className="mt-2">
                     <input
                       type="file"
-                      accept={templateType === 'video' ? "video/*" : "image/*"}
-                      onChange={handleBackgroundUpload}
+                      accept="image/*"
+                      multiple
+                      onChange={handleImagesUpload}
                       className="hidden"
-                      id="background-upload"
+                      id="multi-image-upload"
                     />
-                    <label htmlFor="background-upload">
+                    <label htmlFor="multi-image-upload">
                       <Button variant="outline" className="w-full cursor-pointer" asChild>
                         <span>
                           <Upload className="w-4 h-4 mr-2" />
-                          Upload {templateType === 'video' ? 'Video' : 'Image'}
+                          Upload Images
                         </span>
                       </Button>
                     </label>
@@ -385,6 +593,31 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                   </div>
                 </div>
 
+                {/* Elements List (Sortable) */}
+                <div>
+                  <Label className="text-sm font-medium flex items-center gap-2 mt-4"><Layers className="w-4 h-4" /> Elements</Label>
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                    <SortableContext items={elements.map((el) => el.__uid)} strategy={verticalListSortingStrategy}>
+                      <div className="mt-2">
+                        {elements.map((obj) => (
+                          <SortableElementItem
+                            key={obj.__uid}
+                            id={obj.__uid}
+                            obj={obj}
+                            isActive={selectedObject === obj}
+                            onSelect={(o: any) => {
+                              if (fabricCanvas) {
+                                fabricCanvas.setActiveObject(o);
+                                setSelectedObject(o);
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                </div>
+
                 {/* Actions */}
                 <div className="pt-4 border-t border-border space-y-3">
                   <Button
@@ -396,7 +629,6 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                     <Download className="w-4 h-4 mr-2" />
                     Download Meme
                   </Button>
-                  
                   <Button
                     onClick={handleSaveTemplate}
                     disabled={loading || !templateName}
@@ -414,17 +646,15 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                 </div>
               </div>
             </div>
-
             {/* Center - Canvas */}
             <div className="flex-1 flex items-center justify-center p-6 bg-muted/30">
-              <div className="border border-border rounded-lg shadow-lg bg-white">
+              <div className="border border-border rounded-lg shadow-lg bg-white relative">
                 <canvas ref={canvasRef} />
               </div>
             </div>
           </div>
         </div>
       </div>
-
       {/* Admin Authentication Modal */}
       <Dialog open={showAdminModal} onOpenChange={setShowAdminModal}>
         <DialogContent className="sm:max-w-md">

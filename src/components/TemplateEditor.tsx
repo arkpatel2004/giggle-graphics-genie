@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Upload, Type, Square, Circle, Download, Save } from "lucide-react";
+import { X, Upload, Type, Square, Circle, Trash2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Canvas as FabricCanvas, Rect, Circle as FabricCircle, Textbox } from "fabric";
+import { Canvas as FabricCanvas, Rect, Circle as FabricCircle, Textbox, Image as FabricImage } from "fabric";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+
+const FONT_OPTIONS = [
+  "Arial", "Arial Black", "Comic Sans MS", "Courier New", "Georgia", "Impact", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana"
+];
 
 interface TemplateEditorProps {
   onClose: () => void;
@@ -21,6 +25,9 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
   const [backgroundImage, setBackgroundImage] = useState<string>("");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selectedObject, setSelectedObject] = useState<any>(null);
+  const [color, setColor] = useState("#000000");
+  const [font, setFont] = useState(FONT_OPTIONS[0]);
 
   // Instagram post ratio: 1:1 (1080x1080), Reel ratio: 9:16 (1080x1920)
   const getCanvasDimensions = () => {
@@ -42,10 +49,32 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
 
     setFabricCanvas(canvas);
 
+    // Selection event listeners
+    canvas.on("selection:created", (e) => {
+      setSelectedObject(e.selected?.[0] || null);
+    });
+    canvas.on("selection:updated", (e) => {
+      setSelectedObject(e.selected?.[0] || null);
+    });
+    canvas.on("selection:cleared", () => {
+      setSelectedObject(null);
+    });
+
     return () => {
       canvas.dispose();
     };
   }, [templateType]);
+
+  // Update color/font state when object is selected
+  useEffect(() => {
+    if (!selectedObject) return;
+    if (selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") {
+      setColor(selectedObject.fill || "#000000");
+    }
+    if (selectedObject.type === "textbox") {
+      setFont(selectedObject.fontFamily || FONT_OPTIONS[0]);
+    }
+  }, [selectedObject]);
 
   const handleBackgroundUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -68,6 +97,27 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  // Multi-image upload handler
+  const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !fabricCanvas) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string;
+        // Use promise-based FabricImage.fromURL to avoid TS error
+        FabricImage.fromURL(imageUrl).then((img: any) => {
+          img.set({ left: 50, top: 50, scaleX: 0.5, scaleY: 0.5 });
+          fabricCanvas.add(img);
+          fabricCanvas.setActiveObject(img);
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset input value so same file can be uploaded again
+    e.target.value = "";
   };
 
   const addText = () => {
@@ -117,6 +167,35 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
     
     fabricCanvas.add(circle);
     fabricCanvas.setActiveObject(circle);
+  };
+
+  // Delete selected object
+  const handleDelete = () => {
+    if (fabricCanvas && selectedObject) {
+      fabricCanvas.remove(selectedObject);
+      setSelectedObject(null);
+      fabricCanvas.discardActiveObject();
+      fabricCanvas.requestRenderAll();
+    }
+  };
+
+  // Change color of selected object
+  const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newColor = e.target.value;
+    setColor(newColor);
+    if (selectedObject && (selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle")) {
+      selectedObject.set({ fill: newColor });
+      if (fabricCanvas) fabricCanvas.requestRenderAll();
+    }
+  };
+
+  // Change font of selected text
+  const handleFontChange = (value: string) => {
+    setFont(value);
+    if (selectedObject && selectedObject.type === "textbox") {
+      selectedObject.set({ fontFamily: value });
+      if (fabricCanvas) fabricCanvas.requestRenderAll();
+    }
   };
 
   const exportTemplate = async () => {
@@ -247,6 +326,29 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
                 </div>
               </div>
 
+              {/* Multi-Image Upload */}
+              <div>
+                <Label>Upload Images (as elements)</Label>
+                <div className="mt-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleImagesUpload}
+                    className="hidden"
+                    id="multi-image-upload"
+                  />
+                  <label htmlFor="multi-image-upload">
+                    <Button variant="outline" className="w-full cursor-pointer" asChild>
+                      <span>
+                        <Upload className="w-4 h-4 mr-2" />
+                        Upload Images
+                      </span>
+                    </Button>
+                  </label>
+                </div>
+              </div>
+
               {/* Video Preview */}
               {templateType === 'video' && backgroundImage && (
                 <div>
@@ -318,8 +420,40 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
 
           {/* Center - Canvas */}
           <div className="flex-1 flex items-center justify-center p-6 bg-muted/30">
-            <div className="border border-border rounded-lg shadow-lg bg-white">
+            <div className="border border-border rounded-lg shadow-lg bg-white relative">
               <canvas ref={canvasRef} />
+              {/* Floating panel for selected object actions */}
+              {selectedObject && (
+                <div className="absolute top-2 right-2 bg-white border rounded shadow-lg p-3 flex flex-col gap-2 z-10 min-w-[180px]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-sm">Element Options</span>
+                    <Button variant="ghost" size="icon" onClick={handleDelete} title="Delete">
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </Button>
+                  </div>
+                  {(selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") && (
+                    <div className="mb-2">
+                      <Label className="text-xs">Color</Label>
+                      <Input type="color" value={color} onChange={handleColorChange} className="w-full h-8 p-0 border-none bg-transparent" />
+                    </div>
+                  )}
+                  {selectedObject.type === "textbox" && (
+                    <div>
+                      <Label className="text-xs">Font</Label>
+                      <Select value={font} onValueChange={handleFontChange}>
+                        <SelectTrigger className="w-full h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {FONT_OPTIONS.map((f) => (
+                            <SelectItem key={f} value={f}>{f}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
