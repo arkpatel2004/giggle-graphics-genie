@@ -16,6 +16,27 @@ const FONT_OPTIONS = [
   "Arial", "Arial Black", "Comic Sans MS", "Courier New", "Georgia", "Impact", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana"
 ];
 
+// Helper function to convert data URL to blob
+const dataURLtoBlob = (dataURL: string): Blob => {
+  const arr = dataURL.split(',');
+  const mime = arr[0].match(/:(.*?);/)![1];
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+};
+
+// Helper function to generate unique filename
+const generateFileName = (originalName: string, prefix: string = 'image'): string => {
+  const timestamp = Date.now();
+  const randomString = Math.random().toString(36).substring(2, 15);
+  const extension = originalName.split('.').pop() || 'png';
+  return `${prefix}-${timestamp}-${randomString}.${extension}`;
+};
+
 function getElementTypeIcon(type: string) {
   if (type === "textbox") return <AlignLeft className="w-4 h-4" />;
   if (type === "rect") return <Square className="w-4 h-4" />;
@@ -28,7 +49,7 @@ function getElementLabel(obj: any) {
   if (obj.type === "textbox") return "Text";
   if (obj.type === "rect") return "Box";
   if (obj.type === "circle") return "Circle";
-  if (obj.type === "image") return obj?.src?.split("/").pop() || "Image";
+  if (obj.type === "image") return obj?.originalFileName || "Image";
   return obj.type;
 }
 
@@ -68,6 +89,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   const [templateName, setTemplateName] = useState("");
   const [templateType, setTemplateType] = useState<'photo' | 'video'>('photo');
   const [backgroundImage, setBackgroundImage] = useState<string>("");
+  const [backgroundImageFile, setBackgroundImageFile] = useState<File | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -77,7 +99,10 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   const [selectedObject, setSelectedObject] = useState<any>(null);
   const [color, setColor] = useState("#000000");
   const [font, setFont] = useState(FONT_OPTIONS[0]);
-  const [elements, setElements] = useState<any[]>([]); // Track z-order
+  const [elements, setElements] = useState<any[]>([]);
+  
+  // Store original files for upload after admin authentication
+  const [pendingImageUploads, setPendingImageUploads] = useState<{[key: string]: File}>({});
 
   // DnD-kit setup
   const sensors = useSensors(useSensor(PointerSensor));
@@ -99,6 +124,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       backgroundColor: "#ffffff",
     });
     setFabricCanvas(canvas);
+    
     // Selection event listeners
     canvas.on("selection:created", (e) => {
       setSelectedObject(e.selected?.[0] || null);
@@ -109,6 +135,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     canvas.on("selection:cleared", () => {
       setSelectedObject(null);
     });
+    
     // Track all elements on canvas
     canvas.on("object:added", () => {
       setElements([...canvas.getObjects()]);
@@ -119,6 +146,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     canvas.on("object:modified", () => {
       setElements([...canvas.getObjects()]);
     });
+    
     return () => {
       canvas.dispose();
     };
@@ -140,16 +168,34 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     }
   }, [selectedObject]);
 
-  // Multi-image upload handler
+  // Multi-image upload handler - Store files locally, don't upload to Supabase yet
   const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || !fabricCanvas) return;
+
     Array.from(files).forEach((file) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const imageUrl = event.target?.result as string;
         FabricImage.fromURL(imageUrl).then((img: any) => {
-          img.set({ left: 50, top: 50, scaleX: 0.5, scaleY: 0.5 });
+          img.set({ 
+            left: 50, 
+            top: 50, 
+            scaleX: 0.5, 
+            scaleY: 0.5 
+          });
+          
+          // Store original file and filename for later upload
+          const imageId = `image_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+          img.imageId = imageId;
+          img.originalFileName = file.name;
+          
+          // Store the file for later upload
+          setPendingImageUploads(prev => ({
+            ...prev,
+            [imageId]: file
+          }));
+          
           fabricCanvas.add(img);
           fabricCanvas.setActiveObject(img);
           setElements([...fabricCanvas.getObjects()]);
@@ -160,9 +206,81 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     e.target.value = "";
   };
 
+  // Handle background image upload - Store locally, don't upload yet
+  const handleBackgroundUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (templateType === 'video') {
+      setVideoFile(file);
+      const videoUrl = URL.createObjectURL(file);
+      setBackgroundImage(videoUrl);
+    } else {
+      setBackgroundImageFile(file);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string;
+        setBackgroundImage(imageUrl);
+        
+        if (fabricCanvas) {
+          // Create a Fabric image object and set as background
+          FabricImage.fromURL(imageUrl).then((img) => {
+            const dimensions = getCanvasDimensions();
+            img.scaleToWidth(dimensions.width);
+            img.scaleToHeight(dimensions.height);
+            fabricCanvas.backgroundImage = img;
+            fabricCanvas.renderAll();
+          }).catch((error) => {
+            console.error('Error loading background image:', error);
+            toast.error("Failed to load background image");
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Upload image to Supabase storage (only called after admin auth)
+  const uploadImageToStorage = async (file: File, folder: string = 'template-images'): Promise<string | null> => {
+    try {
+      const fileName = generateFileName(file.name, folder);
+      const filePath = `${folder}/${fileName}`;
+      
+      const { data, error } = await supabase.storage
+        .from('template-assets')
+        .upload(filePath, file);
+
+      if (error) {
+        console.error('Upload error:', error);
+        toast.error(`Failed to upload ${file.name}`);
+        return null;
+      }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('template-assets')
+        .getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error(`Failed to upload ${file.name}`);
+      return null;
+    }
+  };
+
   // Delete selected object
   const handleDelete = () => {
     if (fabricCanvas && selectedObject) {
+      // Remove from pending uploads if it's an image
+      if (selectedObject.imageId) {
+        setPendingImageUploads(prev => {
+          const updated = { ...prev };
+          delete updated[selectedObject.imageId];
+          return updated;
+        });
+      }
+      
       fabricCanvas.remove(selectedObject);
       setSelectedObject(null);
       fabricCanvas.discardActiveObject();
@@ -197,16 +315,16 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       const newIndex = elements.findIndex((el) => el.__uid === over.id);
       const newElements = arrayMove(elements, oldIndex, newIndex);
       setElements(newElements);
+      
       // Reorder objects on canvas
       if (fabricCanvas) {
-        newElements.forEach((obj, idx) => {
-          fabricCanvas.bringObjectToFront(obj); // ✅ Correct method
+        newElements.forEach((obj) => {
+          fabricCanvas.bringObjectToFront(obj);
         });
         fabricCanvas.renderAll();
       }
     }
   };
-
 
   // Assign unique IDs to elements for DnD
   useEffect(() => {
@@ -216,38 +334,6 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     });
     setElements([...fabricCanvas.getObjects()]);
   }, [fabricCanvas, elements.length]);
-
-  const handleBackgroundUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (templateType === 'video') {
-      setVideoFile(file);
-      const videoUrl = URL.createObjectURL(file);
-      setBackgroundImage(videoUrl);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const imageUrl = event.target?.result as string;
-        setBackgroundImage(imageUrl);
-        
-        if (fabricCanvas) {
-          // Create a Fabric image object and set as background
-          FabricImage.fromURL(imageUrl).then((img) => {
-            const dimensions = getCanvasDimensions();
-            img.scaleToWidth(dimensions.width);
-            img.scaleToHeight(dimensions.height);
-            fabricCanvas.backgroundImage = img;
-            fabricCanvas.renderAll();
-          }).catch((error) => {
-            console.error('Error loading image:', error);
-            toast.error("Failed to load image");
-          });
-        }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
 
   const addText = () => {
     if (!fabricCanvas) return;
@@ -345,7 +431,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       if (adminPassword === 'admin123') {
         toast.success("Admin access granted!");
         setShowAdminModal(false);
-        await saveTemplate();
+        await saveTemplate(); // Now upload images and save template
       } else {
         toast.error("Invalid credentials");
       }
@@ -365,36 +451,58 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
 
     try {
       setLoading(true);
+      toast.info("Uploading images and saving template...");
+
+      // Step 1: Upload background image if exists
+      let backgroundImageUrl = null;
+      if (backgroundImageFile && templateType === 'photo') {
+        backgroundImageUrl = await uploadImageToStorage(backgroundImageFile, 'background-images');
+        if (!backgroundImageUrl) {
+          toast.error("Failed to upload background image");
+          return;
+        }
+      }
+
+      // Step 2: Upload all pending element images
+      const imageUrlMapping: {[key: string]: string} = {};
       
-      // Create a thumbnail from the canvas
+      for (const [imageId, file] of Object.entries(pendingImageUploads)) {
+        const uploadedUrl = await uploadImageToStorage(file, 'template-images');
+        if (uploadedUrl) {
+          imageUrlMapping[imageId] = uploadedUrl;
+        } else {
+          toast.error(`Failed to upload ${file.name}`);
+          return; // Stop if any image fails to upload
+        }
+      }
+
+      // Step 3: Create thumbnail
       const thumbnailDataUrl = fabricCanvas.toDataURL({
         format: 'png',
         quality: 0.8,
         multiplier: 0.3
       });
 
-      // Convert data URL to blob for upload
-      const response = await fetch(thumbnailDataUrl);
-      const blob = await response.blob();
-
-      // Upload thumbnail to storage
-      const thumbnailFileName = `thumbnails/${Date.now()}-${templateName.replace(/\s+/g, '-').toLowerCase()}.png`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const thumbnailBlob = dataURLtoBlob(thumbnailDataUrl);
+      const thumbnailFileName = generateFileName(`${templateName}-thumbnail.png`, 'thumbnails');
+      const thumbnailPath = `thumbnails/${thumbnailFileName}`;
+      
+      const { data: thumbnailUploadData, error: thumbnailUploadError } = await supabase.storage
         .from('template-assets')
-        .upload(thumbnailFileName, blob);
+        .upload(thumbnailPath, thumbnailBlob);
 
-      if (uploadError) {
-        console.error('Upload error:', uploadError);
+      if (thumbnailUploadError) {
+        console.error('Thumbnail upload error:', thumbnailUploadError);
         toast.error("Failed to upload thumbnail");
         return;
       }
 
       // Get public URL for thumbnail
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl: thumbnailUrl } } = supabase.storage
         .from('template-assets')
-        .getPublicUrl(thumbnailFileName);
+        .getPublicUrl(thumbnailPath);
 
-      // Prepare layout definition with canvas and elements data
+      // Step 4: Prepare layout definition with uploaded image URLs
       const canvasObjects = fabricCanvas.getObjects();
       const elements = canvasObjects.map((obj, index) => {
         const element: any = {
@@ -412,7 +520,9 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           element.fontFamily = (obj as any).fontFamily || 'Arial';
           element.color = (obj as any).fill || '#000000';
         } else if (obj.type === 'image') {
-          element.imageUrl = (obj as any).src || '';
+          // Use the uploaded URL from mapping
+          const imageId = (obj as any).imageId;
+          element.imageUrl = imageUrlMapping[imageId] || '';
         } else if (obj.type === 'rect') {
           element.fill = (obj as any).fill || '#ffffff';
           element.strokeColor = (obj as any).stroke || '#000000';
@@ -431,16 +541,18 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         canvas: {
           width: fabricCanvas.width || getCanvasDimensions().width,
           height: fabricCanvas.height || getCanvasDimensions().height,
-          backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : '#ffffff'
+          backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : '#ffffff',
+          backgroundImage: backgroundImageUrl
         },
         elements
       };
 
+      // Step 5: Save template to database
       const templateData = {
         name: templateName,
         type: templateType,
         layout_definition: layoutDefinition,
-        thumbnail_url: publicUrl,
+        thumbnail_url: thumbnailUrl,
         tags: ['user-created']
       };
 
@@ -460,6 +572,13 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       setTemplateName("");
       setAdminUsername("");
       setAdminPassword("");
+      setBackgroundImage("");
+      setBackgroundImageFile(null);
+      setVideoFile(null);
+      setPendingImageUploads({});
+      
+      // Optionally close the modal
+      // onClose();
     } catch (error) {
       toast.error("Failed to save template");
       console.error('Error:', error);
@@ -563,6 +682,33 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                   </div>
                 </div>
 
+                {/* Background Upload */}
+                <div>
+                  <Label>Background {templateType === 'video' ? 'Video' : 'Image'}</Label>
+                  <div className="mt-2">
+                    <input
+                      type="file"
+                      accept={templateType === 'video' ? "video/*" : "image/*"}
+                      onChange={handleBackgroundUpload}
+                      className="hidden"
+                      id="background-upload"
+                    />
+                    <label htmlFor="background-upload">
+                      <Button variant="outline" className="w-full cursor-pointer" asChild>
+                        <span>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Upload Background
+                        </span>
+                      </Button>
+                    </label>
+                  </div>
+                  {backgroundImageFile && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      📎 {backgroundImageFile.name} (will upload after save)
+                    </p>
+                  )}
+                </div>
+
                 {/* Multi-Image Upload */}
                 <div>
                   <Label>Upload Images (as elements)</Label>
@@ -584,6 +730,11 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                       </Button>
                     </label>
                   </div>
+                  {Object.keys(pendingImageUploads).length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      📎 {Object.keys(pendingImageUploads).length} image(s) ready (will upload after save)
+                    </p>
+                  )}
                 </div>
 
                 {/* Video Preview */}
@@ -697,6 +848,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           </div>
         </div>
       </div>
+      
       {/* Admin Authentication Modal */}
       <Dialog open={showAdminModal} onOpenChange={setShowAdminModal}>
         <DialogContent className="sm:max-w-md">
@@ -709,8 +861,13 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                 <Lock className="w-8 h-8 text-primary" />
               </div>
               <p className="text-sm text-muted-foreground">
-                Enter admin credentials to save as template
+                Enter admin credentials to save template to database
               </p>
+              {Object.keys(pendingImageUploads).length > 0 && (
+                <p className="text-xs text-yellow-600 mt-2">
+                  ⚠️ {Object.keys(pendingImageUploads).length} images will be uploaded after authentication
+                </p>
+              )}
             </div>
 
             <div>
