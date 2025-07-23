@@ -141,55 +141,23 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   }, [selectedObject]);
 
   // Multi-image upload handler
-  const handleImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || !fabricCanvas) return;
-    
-    toast.info("Uploading images...");
-    
-    for (const file of Array.from(files)) {
-      try {
-        // Upload image to Supabase storage
-        const fileName = `images/${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('template-assets')
-          .upload(fileName, file);
-
-        if (uploadError) {
-          console.error('Upload error:', uploadError);
-          toast.error(`Failed to upload ${file.name}`);
-          continue;
-        }
-
-        // Get public URL for the uploaded image
-        const { data: { publicUrl } } = supabase.storage
-          .from('template-assets')
-          .getPublicUrl(fileName);
-
-        // Add image to canvas using the public URL
-        FabricImage.fromURL(publicUrl).then((img: any) => {
-          img.set({ 
-            left: 50, 
-            top: 50, 
-            scaleX: 0.5, 
-            scaleY: 0.5,
-            src: publicUrl // Store the public URL for later use
-          });
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string;
+        FabricImage.fromURL(imageUrl).then((img: any) => {
+          img.set({ left: 50, top: 50, scaleX: 0.5, scaleY: 0.5 });
           fabricCanvas.add(img);
           fabricCanvas.setActiveObject(img);
           setElements([...fabricCanvas.getObjects()]);
-        }).catch((error) => {
-          console.error('Error loading image from URL:', error);
-          toast.error(`Failed to load ${file.name}`);
         });
-      } catch (error) {
-        console.error('Error uploading image:', error);
-        toast.error(`Failed to process ${file.name}`);
-      }
-    }
-    
+      };
+      reader.readAsDataURL(file);
+    });
     e.target.value = "";
-    toast.success("Images uploaded successfully!");
   };
 
   // Delete selected object
