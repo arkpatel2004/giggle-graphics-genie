@@ -366,49 +366,91 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     try {
       setLoading(true);
       
-      // Get canvas data with all objects including custom properties
-      const canvasData = fabricCanvas.toJSON();
-      
-      // Create template data with proper structure for multiple elements
-      const templateData = {
-        canvas: canvasData,
-        backgroundImage: backgroundImage,
-        backgroundVideo: templateType === 'video' ? backgroundImage : null,
-        dimensions: getCanvasDimensions(),
-        elements: canvasData.objects || [],
-        version: "1.0",
-        type: templateType
+      // Create a thumbnail from the canvas
+      const thumbnailDataUrl = fabricCanvas.toDataURL({
+        format: 'png',
+        quality: 0.8,
+        multiplier: 0.3
+      });
+
+      // Convert data URL to blob for upload
+      const response = await fetch(thumbnailDataUrl);
+      const blob = await response.blob();
+
+      // Upload thumbnail to storage
+      const thumbnailFileName = `thumbnails/${Date.now()}-${templateName.replace(/\s+/g, '-').toLowerCase()}.png`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('template-assets')
+        .upload(thumbnailFileName, blob);
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        toast.error("Failed to upload thumbnail");
+        return;
+      }
+
+      // Get public URL for thumbnail
+      const { data: { publicUrl } } = supabase.storage
+        .from('template-assets')
+        .getPublicUrl(thumbnailFileName);
+
+      // Prepare layout definition with canvas and elements data
+      const canvasObjects = fabricCanvas.getObjects();
+      const elements = canvasObjects.map((obj, index) => {
+        const element: any = {
+          id: `element_${index + 1}`,
+          type: obj.type,
+          x: obj.left || 0,
+          y: obj.top || 0,
+          width: obj.width || 0,
+          height: obj.height || 0,
+        };
+
+        if (obj.type === 'textbox') {
+          element.text = (obj as any).text || '';
+          element.fontSize = (obj as any).fontSize || 16;
+          element.fontFamily = (obj as any).fontFamily || 'Arial';
+          element.color = (obj as any).fill || '#000000';
+        } else if (obj.type === 'image') {
+          element.imageUrl = (obj as any).src || '';
+        } else if (obj.type === 'rect') {
+          element.fill = (obj as any).fill || '#ffffff';
+          element.strokeColor = (obj as any).stroke || '#000000';
+          element.strokeWidth = (obj as any).strokeWidth || 1;
+        } else if (obj.type === 'circle') {
+          element.fill = (obj as any).fill || '#ffffff';
+          element.strokeColor = (obj as any).stroke || '#000000';
+          element.strokeWidth = (obj as any).strokeWidth || 1;
+          element.radius = (obj as any).radius || 50;
+        }
+
+        return element;
+      });
+
+      const layoutDefinition = {
+        canvas: {
+          width: fabricCanvas.width || getCanvasDimensions().width,
+          height: fabricCanvas.height || getCanvasDimensions().height,
+          backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : '#ffffff'
+        },
+        elements
       };
 
-      // Generate thumbnail - handle both image and video backgrounds
-      let thumbnailUrl;
-      if (templateType === 'video' && videoFile) {
-        // For video, create a canvas thumbnail
-        thumbnailUrl = fabricCanvas.toDataURL({
-          format: 'jpeg',
-          quality: 0.8,
-          multiplier: 0.5
-        });
-      } else {
-        thumbnailUrl = fabricCanvas.toDataURL({
-          format: 'jpeg',
-          quality: 0.8,
-          multiplier: 0.5
-        });
-      }
+      const templateData = {
+        name: templateName,
+        type: templateType,
+        layout_definition: layoutDefinition,
+        thumbnail_url: publicUrl,
+        tags: ['user-created']
+      };
 
       const { error } = await supabase
         .from('templates')
-        .insert({
-          name: templateName,
-          type: templateType,
-          url: JSON.stringify(templateData),
-          thumbnail_url: thumbnailUrl,
-        });
+        .insert(templateData);
 
       if (error) {
+        console.error('Error saving template:', error);
         toast.error("Failed to save template");
-        console.error('Error:', error);
         return;
       }
 

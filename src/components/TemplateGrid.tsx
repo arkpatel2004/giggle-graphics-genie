@@ -80,7 +80,7 @@ export const TemplateGrid = ({ type, onEditTemplate }: TemplateGridProps) => {
             <div key={template.id} className="template-card p-4">
               <div className="relative group">
                 <img
-                  src={template.thumbnail_url || template.url}
+                  src={template.thumbnail_url || '/placeholder.svg'}
                   alt={template.name}
                   className="w-full h-48 object-cover rounded-lg mb-3"
                 />

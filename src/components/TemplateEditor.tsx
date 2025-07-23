@@ -240,7 +240,7 @@ export const TemplateEditor = ({ onClose }: TemplateEditorProps) => {
         .insert({
           name: templateName,
           type: templateType,
-          url: templateData,
+          layout_definition: templateData,
           thumbnail_url: thumbnailUrl,
         });
 

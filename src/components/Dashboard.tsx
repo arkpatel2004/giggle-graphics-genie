@@ -8,8 +8,11 @@ export interface Template {
   id: string;
   name: string;
   type: 'photo' | 'video';
-  url: string;
+  layout_definition: any;
   thumbnail_url?: string;
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 export const Dashboard = () => {

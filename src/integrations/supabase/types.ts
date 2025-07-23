@@ -39,29 +39,32 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          layout_definition: Json
           name: string
+          tags: string[] | null
           thumbnail_url: string | null
           type: string
           updated_at: string
-          url: string
         }
         Insert: {
           created_at?: string
           id?: string
+          layout_definition: Json
           name: string
+          tags?: string[] | null
           thumbnail_url?: string | null
           type: string
           updated_at?: string
-          url: string
         }
         Update: {
           created_at?: string
           id?: string
+          layout_definition?: Json
           name?: string
+          tags?: string[] | null
           thumbnail_url?: string | null
           type?: string
           updated_at?: string
-          url?: string
         }
         Relationships: []
       }
