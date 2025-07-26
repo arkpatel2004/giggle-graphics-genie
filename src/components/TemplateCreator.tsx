@@ -37,6 +37,17 @@ const generateFileName = (originalName: string, prefix: string = 'image'): strin
   return `${prefix}-${timestamp}-${randomString}.${extension}`;
 };
 
+// Helper function to get actual rendered dimensions of fabric object
+const getActualObjectDimensions = (obj: any) => {
+  const bounds = obj.getBoundingRect();
+  return {
+    x: bounds.left,
+    y: bounds.top,
+    width: bounds.width,
+    height: bounds.height
+  };
+};
+
 function getElementTypeIcon(type: string) {
   if (type === "textbox") return <AlignLeft className="w-4 h-4" />;
   if (type === "rect") return <Square className="w-4 h-4" />;
@@ -502,16 +513,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         .from('template-assets')
         .getPublicUrl(thumbnailPath);
 
-      // Step 4: Prepare layout definition with uploaded image URLs
+      // Step 4: Prepare layout definition with ACTUAL rendered dimensions
       const canvasObjects = fabricCanvas.getObjects();
       const elements = canvasObjects.map((obj, index) => {
+        // Get actual rendered dimensions instead of raw fabric properties
+        const actualDimensions = getActualObjectDimensions(obj);
+        
         const element: any = {
           id: `element_${index + 1}`,
           type: obj.type,
-          x: obj.left || 0,
-          y: obj.top || 0,
-          width: obj.width || 0,
-          height: obj.height || 0,
+          x: actualDimensions.x,
+          y: actualDimensions.y,
+          width: actualDimensions.width,
+          height: actualDimensions.height,
         };
 
         if (obj.type === 'textbox') {
@@ -523,6 +537,9 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           // Use the uploaded URL from mapping
           const imageId = (obj as any).imageId;
           element.imageUrl = imageUrlMapping[imageId] || '';
+          // Store original image dimensions for proper scaling
+          element.originalWidth = (obj as any).width || actualDimensions.width;
+          element.originalHeight = (obj as any).height || actualDimensions.height;
         } else if (obj.type === 'rect') {
           element.fill = (obj as any).fill || '#ffffff';
           element.strokeColor = (obj as any).stroke || '#000000';
@@ -532,6 +549,9 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           element.strokeColor = (obj as any).stroke || '#000000';
           element.strokeWidth = (obj as any).strokeWidth || 1;
           element.radius = (obj as any).radius || 50;
+          // For circles, use radius instead of width/height
+          element.width = element.radius * 2;
+          element.height = element.radius * 2;
         }
 
         return element;
@@ -839,6 +859,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                 </div>
               </div>
             </div>
+            
             {/* Center - Canvas */}
             <div className="flex-1 flex items-center justify-center p-6 bg-muted/30">
               <div className="border border-border rounded-lg shadow-lg bg-white relative">
