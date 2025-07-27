@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Type, Square, Circle, RotateCcw, Upload, Trash2, AlignLeft, Layers, Image as ImageIcon } from "lucide-react";
+import { ArrowLeft, Download, Type, Square, Circle, RotateCcw, Upload, Trash2, AlignLeft, Layers, Image as ImageIcon, Video, Play, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +19,7 @@ function getElementTypeIcon(type: string) {
   if (type === "rect") return <Square className="w-4 h-4" />;
   if (type === "circle") return <Circle className="w-4 h-4" />;
   if (type === "image") return <ImageIcon className="w-4 h-4" />;
+  if (type === "video") return <Video className="w-4 h-4" />;
   return <Layers className="w-4 h-4" />;
 }
 
@@ -27,6 +28,7 @@ function getElementLabel(obj: any) {
   if (obj.type === "rect") return "Box";
   if (obj.type === "circle") return "Circle";
   if (obj.type === "image") return obj?.originalFileName || "Image";
+  if (obj.type === "video") return obj?.originalFileName || "Video";
   return obj.type;
 }
 
@@ -71,6 +73,10 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
   const [pendingImageUploads, setPendingImageUploads] = useState<{[key: string]: File}>({});
   const [originalTemplateData, setOriginalTemplateData] = useState<any>(null);
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 400, height: 400 });
+  const [videoElements, setVideoElements] = useState<any[]>([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [maxDuration, setMaxDuration] = useState(0);
 
   // DnD-kit setup
   const sensors = useSensors(useSensor(PointerSensor));
@@ -168,6 +174,14 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
           }
           break;
 
+        case 'video':
+          // Video elements are handled separately for preview
+          if (elementData.videoUrl) {
+            setVideoElements(prev => [...prev, elementData]);
+            setMaxDuration(prev => Math.max(prev, elementData.duration || 0));
+          }
+          break;
+
         default:
           console.warn('Unknown element type:', elementData.type);
       }
@@ -224,11 +238,20 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
       // Wait a moment for canvas to be fully ready
       await new Promise(resolve => setTimeout(resolve, 100));
       
+      // Reset video elements
+      setVideoElements([]);
+      setMaxDuration(0);
+      
       // Recreate all elements with EXACT positioning and sizing
       if (layoutDef.elements && Array.isArray(layoutDef.elements)) {
         for (const elementData of layoutDef.elements) {
           await createElementFromData(elementData);
         }
+      }
+      
+      // Set max duration from layout definition
+      if (layoutDef.maxDuration) {
+        setMaxDuration(layoutDef.maxDuration);
       }
       
       // Force canvas to render with exact dimensions
@@ -480,6 +503,25 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     toast.success("Circle added!");
   };
 
+  // Video playback controls
+  const togglePlayback = () => {
+    setIsPlaying(!isPlaying);
+    if (!isPlaying) {
+      // Start playback animation
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        setCurrentTime(elapsed);
+        
+        if (elapsed >= maxDuration) {
+          setCurrentTime(0);
+          setIsPlaying(false);
+          clearInterval(interval);
+        }
+      }, 100);
+    }
+  };
+
   const clearCanvas = () => {
     if (!fabricCanvas || !originalTemplateData) return;
 
@@ -488,6 +530,8 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     
     // Clear pending uploads
     setPendingImageUploads({});
+    setVideoElements([]);
+    setMaxDuration(0);
     
     // Reload original template data
     loadTemplateData();
@@ -644,12 +688,60 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
                 </span>
               </Button>
             </label>
-            {Object.keys(pendingImageUploads).length > 0 && (
-              <p className="text-xs text-muted-foreground mt-2">
-                📎 {Object.keys(pendingImageUploads).length} image(s) ready
-              </p>
-            )}
+              {Object.keys(pendingImageUploads).length > 0 && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  📎 {Object.keys(pendingImageUploads).length} image(s) ready
+                </p>
+              )}
           </div>
+
+          {/* Video Playback Controls - Only for video templates */}
+          {template.type === 'video' && maxDuration > 0 && (
+              <div className="bg-card p-4 rounded-xl border border-border">
+                <h3 className="text-sm font-semibold mb-3">Video Preview</h3>
+                <div className="space-y-3">
+                  <Button
+                    onClick={togglePlayback}
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                  >
+                    {isPlaying ? (
+                      <>
+                        <Pause className="w-4 h-4 mr-2" />
+                        Pause Preview
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4 mr-2" />
+                        Play Preview
+                      </>
+                    )}
+                  </Button>
+                  <div className="text-xs text-muted-foreground text-center">
+                    {currentTime.toFixed(1)}s / {maxDuration.toFixed(1)}s
+                  </div>
+                  <div className="w-full bg-muted rounded h-1">
+                    <div 
+                      className="bg-primary h-1 rounded transition-all duration-100"
+                      style={{ width: `${(currentTime / maxDuration) * 100}%` }}
+                    />
+                  </div>
+                  {videoElements.length > 0 && (
+                    <div className="mt-3 space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        📹 {videoElements.length} video element(s)
+                      </p>
+                      {videoElements.map((video, index) => (
+                        <div key={index} className="text-xs text-muted-foreground bg-muted/50 p-1 rounded">
+                          {video.originalFileName} ({video.duration?.toFixed(1)}s)
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
           {/* Elements List - FIX: Added unique keys */}
           <div className="bg-card p-4 rounded-xl border border-border">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Upload, Type, Square, Circle, Download, Save, User, Lock, Trash2, AlignLeft, Layers, Image as ImageIcon } from "lucide-react";
+import { X, Upload, Type, Square, Circle, Download, Save, User, Lock, Trash2, AlignLeft, Layers, Image as ImageIcon, Video, Play, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,6 +53,7 @@ function getElementTypeIcon(type: string) {
   if (type === "rect") return <Square className="w-4 h-4" />;
   if (type === "circle") return <Circle className="w-4 h-4" />;
   if (type === "image") return <ImageIcon className="w-4 h-4" />;
+  if (type === "video") return <Video className="w-4 h-4" />;
   return <Layers className="w-4 h-4" />;
 }
 
@@ -61,6 +62,7 @@ function getElementLabel(obj: any) {
   if (obj.type === "rect") return "Box";
   if (obj.type === "circle") return "Circle";
   if (obj.type === "image") return obj?.originalFileName || "Image";
+  if (obj.type === "video") return obj?.originalFileName || "Video";
   return obj.type;
 }
 
@@ -107,9 +109,14 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   const [color, setColor] = useState("#000000");
   const [font, setFont] = useState(FONT_OPTIONS[0]);
   const [elements, setElements] = useState<any[]>([]);
+  const [videoElements, setVideoElements] = useState<any[]>([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [maxDuration, setMaxDuration] = useState(0);
   
   // Store original files for upload after admin authentication
   const [pendingImageUploads, setPendingImageUploads] = useState<{[key: string]: File}>({});
+  const [pendingVideoUploads, setPendingVideoUploads] = useState<{[key: string]: File}>({});
 
   // DnD-kit setup
   const sensors = useSensors(useSensor(PointerSensor));
@@ -240,8 +247,98 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     e.target.value = "";
   };
 
+  // Multi-video upload handler - Store files locally, don't upload to Supabase yet
+  const handleVideosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !fabricCanvas) return;
+
+    Array.from(files).forEach((file) => {
+      // Validate video file size (40MB max)
+      if (file.size > 40 * 1024 * 1024) {
+        toast.error(`Video ${file.name} is too large. Maximum size is 40MB.`);
+        return;
+      }
+
+      const video = document.createElement('video');
+      const videoUrl = URL.createObjectURL(file);
+      
+      video.onloadedmetadata = () => {
+        // Validate video duration (50 seconds max)
+        if (video.duration > 50) {
+          toast.error(`Video ${file.name} is too long. Maximum duration is 50 seconds.`);
+          URL.revokeObjectURL(videoUrl);
+          return;
+        }
+
+        // Create video element for canvas
+        const videoElement = {
+          type: 'video',
+          videoUrl: videoUrl,
+          duration: video.duration,
+          width: video.videoWidth,
+          height: video.videoHeight,
+          x: 50,
+          y: 50,
+          scaleX: 0.3,
+          scaleY: 0.3,
+          originalFileName: file.name
+        };
+
+        // Store original file and filename for later upload
+        const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+        (videoElement as any).videoId = videoId;
+        
+        // Store the file for later upload
+        setPendingVideoUploads(prev => ({
+          ...prev,
+          [videoId]: file
+        }));
+
+        // Add to video elements list
+        setVideoElements(prev => [...prev, videoElement]);
+        
+        // Update max duration
+        setMaxDuration(prev => Math.max(prev, video.duration));
+        
+        toast.success(`Video ${file.name} added (${video.duration.toFixed(1)}s)`);
+      };
+
+      video.src = videoUrl;
+    });
+    e.target.value = "";
+  };
+
   // Upload image to Supabase storage (only called after admin auth)
   const uploadImageToStorage = async (file: File, folder: string = 'template-images'): Promise<string | null> => {
+    try {
+      const fileName = generateFileName(file.name, folder);
+      const filePath = `${folder}/${fileName}`;
+      
+      const { data, error } = await supabase.storage
+        .from('template-assets')
+        .upload(filePath, file);
+
+      if (error) {
+        console.error('Upload error:', error);
+        toast.error(`Failed to upload ${file.name}`);
+        return null;
+      }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('template-assets')
+        .getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error(`Failed to upload ${file.name}`);
+      return null;
+    }
+  };
+
+  // Upload video to Supabase storage (only called after admin auth)
+  const uploadVideoToStorage = async (file: File, folder: string = 'template-videos'): Promise<string | null> => {
     try {
       const fileName = generateFileName(file.name, folder);
       const filePath = `${folder}/${fileName}`;
@@ -287,6 +384,26 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       fabricCanvas.requestRenderAll();
       setElements([...fabricCanvas.getObjects()]);
     }
+  };
+
+  // Delete video element
+  const handleDeleteVideo = (videoId: string) => {
+    // Remove from video elements
+    setVideoElements(prev => prev.filter(v => v.videoId !== videoId));
+    
+    // Remove from pending uploads
+    setPendingVideoUploads(prev => {
+      const updated = { ...prev };
+      delete updated[videoId];
+      return updated;
+    });
+
+    // Recalculate max duration
+    const remainingVideos = videoElements.filter(v => v.videoId !== videoId);
+    const newMaxDuration = remainingVideos.length > 0 
+      ? Math.max(...remainingVideos.map(v => v.duration))
+      : 0;
+    setMaxDuration(newMaxDuration);
   };
 
   // Change color of selected object
@@ -384,9 +501,34 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     fabricCanvas.setActiveObject(circle);
   };
 
-  // FIXED: Download with scaled up dimensions (original reel size)
+  // Video playback controls
+  const togglePlayback = () => {
+    setIsPlaying(!isPlaying);
+    if (!isPlaying) {
+      // Start playback animation
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        setCurrentTime(elapsed);
+        
+        if (elapsed >= maxDuration) {
+          setCurrentTime(0);
+          setIsPlaying(false);
+          clearInterval(interval);
+        }
+      }, 100);
+    }
+  };
+
+  // FIXED: Download with scaled up dimensions (original reel size) or video
   const downloadMeme = () => {
     if (!fabricCanvas) return;
+
+    if (templateType === 'video') {
+      // For video templates, we need to create a video file
+      toast.info("Video download will be implemented with video rendering");
+      return;
+    }
 
     try {
       const originalDimensions = getOriginalDimensions();
@@ -475,6 +617,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         }
       }
 
+      // Upload all pending element videos
+      const videoUrlMapping: {[key: string]: string} = {};
+      
+      for (const [videoId, file] of Object.entries(pendingVideoUploads)) {
+        const uploadedUrl = await uploadVideoToStorage(file, 'template-videos');
+        if (uploadedUrl) {
+          videoUrlMapping[videoId] = uploadedUrl;
+        } else {
+          toast.error(`Failed to upload ${(file as File).name}`);
+          return;
+        }
+      }
+
       // Create thumbnail
       const thumbnailDataUrl = fabricCanvas.toDataURL({
         format: 'png',
@@ -541,6 +696,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         return element;
       });
 
+      // Add video elements to layout definition
+      const videoElementsForSave = videoElements.map((video, index) => ({
+        id: `video_element_${index + 1}`,
+        type: 'video',
+        x: video.x,
+        y: video.y,
+        width: video.width * video.scaleX,
+        height: video.height * video.scaleY,
+        videoUrl: videoUrlMapping[video.videoId] || video.videoUrl,
+        duration: video.duration,
+        originalFileName: video.originalFileName
+      }));
+
       // FIXED: Save with current canvas dimensions (smaller video canvas)
       const canvasDimensions = getCanvasDimensions();
       const layoutDefinition = {
@@ -550,7 +718,8 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : getCanvasBackgroundColor(),
           backgroundImage: null
         },
-        elements
+        elements: [...elements, ...videoElementsForSave],
+        maxDuration: templateType === 'video' ? maxDuration : undefined
       };
 
       // Save template to database
@@ -579,6 +748,9 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       setAdminUsername("");
       setAdminPassword("");
       setPendingImageUploads({});
+      setPendingVideoUploads({});
+      setVideoElements([]);
+      setMaxDuration(0);
       
     } catch (error) {
       toast.error("Failed to save template");
@@ -735,6 +907,88 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                   )}
                 </div>
 
+                {/* Upload Videos - Only for video templates */}
+                {templateType === 'video' && (
+                  <div className="bg-card p-4 rounded-xl border border-border">
+                    <h3 className="text-sm font-semibold mb-3">Upload Videos</h3>
+                    <input
+                      type="file"
+                      accept="video/*"
+                      multiple
+                      onChange={handleVideosUpload}
+                      className="hidden"
+                      id="multi-video-upload"
+                    />
+                    <label htmlFor="multi-video-upload">
+                      <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
+                        <span>
+                          <Video className="w-4 h-4 mr-2" />
+                          Add Videos
+                        </span>
+                      </Button>
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Max 50 seconds, Max 40MB per video
+                    </p>
+                    {videoElements.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          📹 {videoElements.length} video(s) ready | Duration: {maxDuration.toFixed(1)}s
+                        </p>
+                        {videoElements.map((video, index) => (
+                          <div key={video.videoId} className="flex items-center justify-between bg-muted/50 p-2 rounded text-xs">
+                            <span>{video.originalFileName} ({video.duration.toFixed(1)}s)</span>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={() => handleDeleteVideo(video.videoId)}
+                              className="h-6 w-6 p-0"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Video Playback Controls - Only for video templates */}
+                {templateType === 'video' && maxDuration > 0 && (
+                  <div className="bg-card p-4 rounded-xl border border-border">
+                    <h3 className="text-sm font-semibold mb-3">Video Preview</h3>
+                    <div className="space-y-3">
+                      <Button
+                        onClick={togglePlayback}
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                      >
+                        {isPlaying ? (
+                          <>
+                            <Pause className="w-4 h-4 mr-2" />
+                            Pause Preview
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-4 h-4 mr-2" />
+                            Play Preview
+                          </>
+                        )}
+                      </Button>
+                      <div className="text-xs text-muted-foreground text-center">
+                        {currentTime.toFixed(1)}s / {maxDuration.toFixed(1)}s
+                      </div>
+                      <div className="w-full bg-muted rounded h-1">
+                        <div 
+                          className="bg-primary h-1 rounded transition-all duration-100"
+                          style={{ width: `${(currentTime / maxDuration) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Elements List */}
                 <div className="bg-card p-4 rounded-xl border border-border">
                   <h3 className="text-sm font-semibold mb-3 flex items-center">
@@ -823,10 +1077,15 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
               <p className="text-sm text-muted-foreground">
                 Enter admin credentials to save template to database
               </p>
-              {Object.keys(pendingImageUploads).length > 0 && (
-                <p className="text-xs text-yellow-600 mt-2">
-                  ⚠️ {Object.keys(pendingImageUploads).length} images will be uploaded after authentication
-                </p>
+              {(Object.keys(pendingImageUploads).length > 0 || Object.keys(pendingVideoUploads).length > 0) && (
+                <div className="text-xs text-yellow-600 mt-2 space-y-1">
+                  {Object.keys(pendingImageUploads).length > 0 && (
+                    <p>⚠️ {Object.keys(pendingImageUploads).length} images will be uploaded</p>
+                  )}
+                  {Object.keys(pendingVideoUploads).length > 0 && (
+                    <p>⚠️ {Object.keys(pendingVideoUploads).length} videos will be uploaded</p>
+                  )}
+                </div>
               )}
             </div>
 
