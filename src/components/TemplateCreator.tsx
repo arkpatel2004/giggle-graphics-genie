@@ -30,7 +30,7 @@ const dataURLtoBlob = (dataURL: string): Blob => {
 };
 
 // Helper function to generate unique filename
-const generateFileName = (originalName: string, prefix: string = 'image'): string => {
+const generateFileName = (originalName: string, prefix: string = 'image'): String => {
   const timestamp = Date.now();
   const randomString = Math.random().toString(36).substring(2, 15);
   const extension = originalName.split('.').pop() || 'png';
@@ -95,13 +95,9 @@ interface TemplateCreatorProps {
 
 export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateType, setTemplateType] = useState<'photo' | 'video'>('photo');
-  const [backgroundImage, setBackgroundImage] = useState<string>("");
-  const [backgroundImageFile, setBackgroundImageFile] = useState<File | null>(null);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminUsername, setAdminUsername] = useState("");
@@ -118,21 +114,48 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
   // DnD-kit setup
   const sensors = useSensors(useSensor(PointerSensor));
 
-  // Instagram post ratio: 1:1 (1080x1080), Reel ratio: 9:16 (1080x1920)
+  // FIXED: Canvas dimensions now match display dimensions (for smaller video canvas)
   const getCanvasDimensions = () => {
     if (templateType === 'video') {
-      return { width: 400, height: 711 }; // 9:16 ratio scaled down
+      // Video canvas: same height as photo but narrower (maintains 9:16 ratio)
+      const height = 500;
+      const width = Math.round(height * (9/16)); // 400 * (9/16) = 225px
+      return { width, height };
     }
-    return { width: 400, height: 400 }; // 1:1 ratio
+    return { width: 400, height: 400 }; // Photo: 1:1 ratio
   };
+
+  // FIXED: Original dimensions only for download (true reel size)
+  const getOriginalDimensions = () => {
+    if (templateType === 'video') {
+      return { width: 400, height: 711 }; // Original reel dimensions for download only
+    }
+    return { width: 400, height: 400 }; // Photo remains same
+  };
+
+  // Set canvas background color based on template type
+  const getCanvasBackgroundColor = () => {
+    return templateType === 'video' ? '#000000' : '#ffffff';
+  };
+
+  // Update canvas background immediately when template type changes
+  useEffect(() => {
+    if (fabricCanvas) {
+      const backgroundColor = getCanvasBackgroundColor();
+      fabricCanvas.backgroundColor = backgroundColor;
+      fabricCanvas.renderAll();
+    }
+  }, [templateType, fabricCanvas]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const dimensions = getCanvasDimensions();
+    const dimensions = getCanvasDimensions(); // FIXED: Use smaller dimensions for canvas
+    const backgroundColor = getCanvasBackgroundColor();
+    
     const canvas = new FabricCanvas(canvasRef.current, {
       width: dimensions.width,
       height: dimensions.height,
-      backgroundColor: "#ffffff",
+      backgroundColor: backgroundColor,
     });
     setFabricCanvas(canvas);
     
@@ -215,40 +238,6 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       reader.readAsDataURL(file);
     });
     e.target.value = "";
-  };
-
-  // Handle background image upload - Store locally, don't upload yet
-  const handleBackgroundUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (templateType === 'video') {
-      setVideoFile(file);
-      const videoUrl = URL.createObjectURL(file);
-      setBackgroundImage(videoUrl);
-    } else {
-      setBackgroundImageFile(file);
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const imageUrl = event.target?.result as string;
-        setBackgroundImage(imageUrl);
-        
-        if (fabricCanvas) {
-          // Create a Fabric image object and set as background
-          FabricImage.fromURL(imageUrl).then((img) => {
-            const dimensions = getCanvasDimensions();
-            img.scaleToWidth(dimensions.width);
-            img.scaleToHeight(dimensions.height);
-            fabricCanvas.backgroundImage = img;
-            fabricCanvas.renderAll();
-          }).catch((error) => {
-            console.error('Error loading background image:', error);
-            toast.error("Failed to load background image");
-          });
-        }
-      };
-      reader.readAsDataURL(file);
-    }
   };
 
   // Upload image to Supabase storage (only called after admin auth)
@@ -353,7 +342,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       left: 50,
       top: 50,
       fontSize: 24,
-      fill: "#000000",
+      fill: templateType === 'video' ? "#ffffff" : "#000000",
       fontFamily: "Arial",
       width: 200,
     });
@@ -395,14 +384,23 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     fabricCanvas.setActiveObject(circle);
   };
 
+  // FIXED: Download with scaled up dimensions (original reel size)
   const downloadMeme = () => {
     if (!fabricCanvas) return;
 
     try {
+      const originalDimensions = getOriginalDimensions();
+      const currentDimensions = getCanvasDimensions();
+      
+      // Calculate scale factors for original size download
+      const scaleX = originalDimensions.width / currentDimensions.width;
+      const scaleY = originalDimensions.height / currentDimensions.height;
+      
+      // Create high-resolution download
       const dataURL = fabricCanvas.toDataURL({
         format: 'png',
         quality: 1,
-        multiplier: 2 // Higher resolution
+        multiplier: Math.max(scaleX, scaleY) * 2 // Scale up to original size + higher resolution
       });
 
       const link = document.createElement('a');
@@ -442,7 +440,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       if (adminPassword === 'admin123') {
         toast.success("Admin access granted!");
         setShowAdminModal(false);
-        await saveTemplate(); // Now upload images and save template
+        await saveTemplate();
       } else {
         toast.error("Invalid credentials");
       }
@@ -464,17 +462,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       setLoading(true);
       toast.info("Uploading images and saving template...");
 
-      // Step 1: Upload background image if exists
-      let backgroundImageUrl = null;
-      if (backgroundImageFile && templateType === 'photo') {
-        backgroundImageUrl = await uploadImageToStorage(backgroundImageFile, 'background-images');
-        if (!backgroundImageUrl) {
-          toast.error("Failed to upload background image");
-          return;
-        }
-      }
-
-      // Step 2: Upload all pending element images
+      // Upload all pending element images
       const imageUrlMapping: {[key: string]: string} = {};
       
       for (const [imageId, file] of Object.entries(pendingImageUploads)) {
@@ -483,11 +471,11 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           imageUrlMapping[imageId] = uploadedUrl;
         } else {
           toast.error(`Failed to upload ${file.name}`);
-          return; // Stop if any image fails to upload
+          return;
         }
       }
 
-      // Step 3: Create thumbnail
+      // Create thumbnail
       const thumbnailDataUrl = fabricCanvas.toDataURL({
         format: 'png',
         quality: 0.8,
@@ -513,10 +501,9 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         .from('template-assets')
         .getPublicUrl(thumbnailPath);
 
-      // Step 4: Prepare layout definition with ACTUAL rendered dimensions
+      // Prepare layout definition with current canvas dimensions
       const canvasObjects = fabricCanvas.getObjects();
       const elements = canvasObjects.map((obj, index) => {
-        // Get actual rendered dimensions instead of raw fabric properties
         const actualDimensions = getActualObjectDimensions(obj);
         
         const element: any = {
@@ -534,10 +521,8 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           element.fontFamily = (obj as any).fontFamily || 'Arial';
           element.color = (obj as any).fill || '#000000';
         } else if (obj.type === 'image') {
-          // Use the uploaded URL from mapping
           const imageId = (obj as any).imageId;
           element.imageUrl = imageUrlMapping[imageId] || '';
-          // Store original image dimensions for proper scaling
           element.originalWidth = (obj as any).width || actualDimensions.width;
           element.originalHeight = (obj as any).height || actualDimensions.height;
         } else if (obj.type === 'rect') {
@@ -549,7 +534,6 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           element.strokeColor = (obj as any).stroke || '#000000';
           element.strokeWidth = (obj as any).strokeWidth || 1;
           element.radius = (obj as any).radius || 50;
-          // For circles, use radius instead of width/height
           element.width = element.radius * 2;
           element.height = element.radius * 2;
         }
@@ -557,17 +541,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         return element;
       });
 
+      // FIXED: Save with current canvas dimensions (smaller video canvas)
+      const canvasDimensions = getCanvasDimensions();
       const layoutDefinition = {
         canvas: {
-          width: fabricCanvas.width || getCanvasDimensions().width,
-          height: fabricCanvas.height || getCanvasDimensions().height,
-          backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : '#ffffff',
-          backgroundImage: backgroundImageUrl
+          width: canvasDimensions.width, // Save with display dimensions
+          height: canvasDimensions.height,
+          backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : getCanvasBackgroundColor(),
+          backgroundImage: null
         },
         elements
       };
 
-      // Step 5: Save template to database
+      // Save template to database
       const templateData = {
         name: templateName,
         type: templateType,
@@ -592,13 +578,8 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       setTemplateName("");
       setAdminUsername("");
       setAdminPassword("");
-      setBackgroundImage("");
-      setBackgroundImageFile(null);
-      setVideoFile(null);
       setPendingImageUploads({});
       
-      // Optionally close the modal
-      // onClose();
     } catch (error) {
       toast.error("Failed to save template");
       console.error('Error:', error);
@@ -615,206 +596,157 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     setShowAdminModal(true);
   };
 
-  const dimensions = getCanvasDimensions();
+  const displayDimensions = getCanvasDimensions(); // Now same as canvas dimensions
 
   return (
     <>
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-card rounded-xl border border-border w-full max-w-6xl h-[90vh] flex flex-col">
           {/* Header */}
-          <div className="flex flex-col gap-2 p-6 border-b border-border">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">Create Template</h2>
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            {/* Advanced element options toolbar */}
-            {selectedObject && (
-              <div className="flex items-center gap-4 py-2 px-4 rounded-lg border bg-muted/50 shadow-sm">
-                <Button variant="ghost" size="icon" onClick={handleDelete} title="Delete">
-                  <Trash2 className="w-5 h-5 text-destructive" />
-                </Button>
-                {(selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Color</span>
-                    <button
-                      className="w-6 h-6 rounded border border-border flex items-center justify-center"
-                      style={{ background: color }}
-                      onClick={() => {
-                        const input = document.createElement('input');
-                        input.type = 'color';
-                        input.value = color;
-                        input.oninput = (e: any) => handleColorChange(e.target.value);
-                        input.click();
-                      }}
-                      title="Change Color"
-                    />
-                  </div>
-                )}
-                {selectedObject.type === "textbox" && (
-                  <div className="flex items-center gap-2">
-                    <AlignLeft className="w-5 h-5 text-muted-foreground" />
-                    <Select value={font} onValueChange={handleFontChange}>
-                      <SelectTrigger className="w-24 h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {FONT_OPTIONS.map((f) => (
-                          <SelectItem key={f} value={f}>{f}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
-            )}
+          <div className="flex items-center justify-between p-6 border-b border-border">
+            <h2 className="text-xl font-bold">Create Template</h2>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              <X className="w-4 h-4" />
+            </Button>
           </div>
 
           <div className="flex flex-1 overflow-hidden">
             {/* Left Panel - Controls */}
             <div className="w-80 border-r border-border p-6 overflow-y-auto">
               <div className="space-y-6">
-                {/* Template Info */}
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="template-name">Template Name</Label>
-                    <Input
-                      id="template-name"
-                      value={templateName}
-                      onChange={(e) => setTemplateName(e.target.value)}
-                      placeholder="Enter template name"
-                      className="mt-1"
-                    />
-                  </div>
-
-                  <div>
-                    <Label htmlFor="template-type">Template Type</Label>
-                    <Select value={templateType} onValueChange={(value: 'photo' | 'video') => setTemplateType(value)}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="photo">Photo (1:1 ratio)</SelectItem>
-                        <SelectItem value="video">Video (9:16 ratio)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Background Upload */}
-                <div>
-                  <Label>Background {templateType === 'video' ? 'Video' : 'Image'}</Label>
-                  <div className="mt-2">
-                    <input
-                      type="file"
-                      accept={templateType === 'video' ? "video/*" : "image/*"}
-                      onChange={handleBackgroundUpload}
-                      className="hidden"
-                      id="background-upload"
-                    />
-                    <label htmlFor="background-upload">
-                      <Button variant="outline" className="w-full cursor-pointer" asChild>
-                        <span>
-                          <Upload className="w-4 h-4 mr-2" />
-                          Upload Background
-                        </span>
+                {/* Selected Element Toolbar - Moved to top */}
+                {selectedObject && (
+                  <div className="bg-card p-4 rounded-xl border border-border">
+                    <h3 className="text-sm font-semibold mb-3">Selected Element</h3>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Button variant="ghost" size="icon" onClick={handleDelete} title="Delete">
+                        <Trash2 className="w-4 h-4 text-destructive" />
                       </Button>
-                    </label>
-                  </div>
-                  {backgroundImageFile && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      📎 {backgroundImageFile.name} (will upload after save)
-                    </p>
-                  )}
-                </div>
-
-                {/* Multi-Image Upload */}
-                <div>
-                  <Label>Upload Images (as elements)</Label>
-                  <div className="mt-2">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={handleImagesUpload}
-                      className="hidden"
-                      id="multi-image-upload"
-                    />
-                    <label htmlFor="multi-image-upload">
-                      <Button variant="outline" className="w-full cursor-pointer" asChild>
-                        <span>
-                          <Upload className="w-4 h-4 mr-2" />
-                          Upload Images
-                        </span>
-                      </Button>
-                    </label>
-                  </div>
-                  {Object.keys(pendingImageUploads).length > 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      📎 {Object.keys(pendingImageUploads).length} image(s) ready (will upload after save)
-                    </p>
-                  )}
-                </div>
-
-                {/* Video Preview */}
-                {templateType === 'video' && backgroundImage && (
-                  <div>
-                    <Label>Video Preview</Label>
-                    <video
-                      ref={videoRef}
-                      src={backgroundImage}
-                      className="w-full mt-2 rounded border"
-                      controls
-                      muted
-                      style={{ maxHeight: '150px' }}
-                    />
+                      {(selectedObject.type === "textbox" || selectedObject.type === "rect" || selectedObject.type === "circle") && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs">Color</span>
+                          <button
+                            className="w-6 h-6 rounded border border-border"
+                            style={{ background: color }}
+                            onClick={() => {
+                              const input = document.createElement('input');
+                              input.type = 'color';
+                              input.value = color;
+                              input.oninput = (e: any) => handleColorChange(e.target.value);
+                              input.click();
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {selectedObject.type === "textbox" && (
+                      <div>
+                        <Label className="text-xs">Font</Label>
+                        <Select value={font} onValueChange={handleFontChange}>
+                          <SelectTrigger className="w-full h-8 text-xs mt-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {FONT_OPTIONS.map((f) => (
+                              <SelectItem key={f} value={f}>{f}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* Tools */}
-                <div>
-                  <Label className="text-sm font-medium">Add Elements</Label>
-                  <div className="grid grid-cols-2 gap-2 mt-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={addText}
-                      className="flex items-center gap-2"
-                    >
-                      <Type className="w-4 h-4" />
-                      Text
+                {/* Template Info */}
+                <div className="bg-card p-4 rounded-xl border border-border">
+                  <h3 className="text-sm font-semibold mb-3">Template Info</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="template-name">Template Name</Label>
+                      <Input
+                        id="template-name"
+                        value={templateName}
+                        onChange={(e) => setTemplateName(e.target.value)}
+                        placeholder="Enter template name"
+                        className="mt-1"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="template-type">Template Type</Label>
+                      <Select value={templateType} onValueChange={(value: 'photo' | 'video') => setTemplateType(value)}>
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="photo">Photo (1:1 ratio)</SelectItem>
+                          <SelectItem value="video">Video (9:16 ratio)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Add Elements */}
+                <div className="bg-card p-4 rounded-xl border border-border">
+                  <h3 className="text-sm font-semibold mb-3 flex items-center">
+                    <Type className="w-4 h-4 mr-2" />
+                    Add Elements
+                  </h3>
+                  <div className="space-y-2">
+                    <Button onClick={addText} variant="outline" size="sm" className="w-full justify-start">
+                      <Type className="w-4 h-4 mr-2" />
+                      Add Text
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={addRectangle}
-                      className="flex items-center gap-2"
-                    >
-                      <Square className="w-4 h-4" />
-                      Box
+                    <Button onClick={addRectangle} variant="outline" size="sm" className="w-full justify-start">
+                      <Square className="w-4 h-4 mr-2" />
+                      Add Rectangle
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={addCircle}
-                      className="flex items-center gap-2 col-span-2"
-                    >
-                      <Circle className="w-4 h-4" />
-                      Circle
+                    <Button onClick={addCircle} variant="outline" size="sm" className="w-full justify-start">
+                      <Circle className="w-4 h-4 mr-2" />
+                      Add Circle
                     </Button>
                   </div>
                 </div>
 
-                {/* Elements List (Sortable) */}
-                <div>
-                  <Label className="text-sm font-medium flex items-center gap-2 mt-4"><Layers className="w-4 h-4" /> Elements</Label>
+                {/* Upload Images */}
+                <div className="bg-card p-4 rounded-xl border border-border">
+                  <h3 className="text-sm font-semibold mb-3">Upload Images</h3>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleImagesUpload}
+                    className="hidden"
+                    id="multi-image-upload"
+                  />
+                  <label htmlFor="multi-image-upload">
+                    <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
+                      <span>
+                        <Upload className="w-4 h-4 mr-2" />
+                        Add Images
+                      </span>
+                    </Button>
+                  </label>
+                  {Object.keys(pendingImageUploads).length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      📎 {Object.keys(pendingImageUploads).length} image(s) ready
+                    </p>
+                  )}
+                </div>
+
+                {/* Elements List */}
+                <div className="bg-card p-4 rounded-xl border border-border">
+                  <h3 className="text-sm font-semibold mb-3 flex items-center">
+                    <Layers className="w-4 h-4 mr-2" />
+                    Elements
+                  </h3>
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                     <SortableContext items={elements.map((el) => el.__uid)} strategy={verticalListSortingStrategy}>
-                      <div className="mt-2">
-                        {elements.map((obj) => (
+                      <div className="space-y-1">
+                        {elements.map((obj, index) => (
                           <SortableElementItem
-                            key={obj.__uid}
+                            key={obj.__uid || `element-${index}`}
                             id={obj.__uid}
                             obj={obj}
                             isActive={selectedObject === obj}
@@ -832,39 +764,46 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                 </div>
 
                 {/* Actions */}
-                <div className="pt-4 border-t border-border space-y-3">
-                  <Button
-                    onClick={downloadMeme}
-                    disabled={!fabricCanvas}
-                    variant="outline"
-                    className="w-full"
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Meme
-                  </Button>
-                  <Button
-                    onClick={handleSaveTemplate}
-                    disabled={loading || !templateName}
-                    className="w-full btn-gradient text-primary-foreground"
-                  >
-                    {loading ? (
-                      "Saving..."
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4 mr-2" />
-                        Save Template
-                      </>
-                    )}
-                  </Button>
+                <div className="bg-card p-4 rounded-xl border border-border">
+                  <h3 className="text-sm font-semibold mb-3">Actions</h3>
+                  <div className="space-y-3">
+                    <Button
+                      onClick={downloadMeme}
+                      disabled={!fabricCanvas}
+                      variant="outline"
+                      className="w-full"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download Meme
+                    </Button>
+                    <Button
+                      onClick={handleSaveTemplate}
+                      disabled={loading || !templateName}
+                      className="w-full btn-gradient text-primary-foreground"
+                    >
+                      {loading ? (
+                        "Saving..."
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4 mr-2" />
+                          Save Template
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
             
-            {/* Center - Canvas */}
+            {/* Canvas container - now matches canvas dimensions exactly */}
             <div className="flex-1 flex items-center justify-center p-6 bg-muted/30">
-              <div className="border border-border rounded-lg shadow-lg bg-white relative">
-                <canvas ref={canvasRef} />
-              </div>
+                <canvas 
+                  ref={canvasRef} 
+                  style={{
+                    width: `${displayDimensions.width}px`,
+                    height: `${displayDimensions.height}px`,
+                  }}
+                />
             </div>
           </div>
         </div>
