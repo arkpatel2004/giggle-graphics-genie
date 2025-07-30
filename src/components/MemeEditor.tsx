@@ -178,10 +178,12 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
           // Create video element as canvas object (similar to image)
           if (elementData.videoUrl) {
             try {
-              // Create a canvas to show video preview
+              // Create a video element for playback
               const video = document.createElement('video');
               video.src = elementData.videoUrl;
               video.crossOrigin = 'anonymous';
+              video.muted = true;
+              video.loop = false;
               
               video.onloadeddata = () => {
                 const videoCanvas = document.createElement('canvas');
@@ -212,11 +214,12 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
                       });
                     }
                     
-                    // Mark as video element
+                    // Mark as video element and attach video for playback
                     img.isVideo = true;
                     img.videoDuration = elementData.duration;
                     img.videoUrl = elementData.videoUrl;
                     img.originalFileName = elementData.originalFileName;
+                    img.videoElement = video; // Store actual video element for playback
                     
                     fabricCanvas.add(img);
                     setMaxDuration(prev => Math.max(prev, elementData.duration || 0));
@@ -557,22 +560,59 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     toast.success("Circle added!");
   };
 
-  // Video playback controls
+  // Video playback controls - sync all video elements
   const togglePlayback = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying) {
-      // Start playback animation
-      const startTime = Date.now();
+    if (!fabricCanvas) return;
+    
+    const videoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo);
+    if (videoObjects.length === 0) return;
+    
+    const newIsPlaying = !isPlaying;
+    setIsPlaying(newIsPlaying);
+    
+    if (newIsPlaying) {
+      // Start all videos
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.currentTime = currentTime;
+          obj.videoElement.play().catch(console.error);
+        }
+      });
+      
+      // Start playback timer
+      const startTime = Date.now() - (currentTime * 1000);
       const interval = setInterval(() => {
         const elapsed = (Date.now() - startTime) / 1000;
         setCurrentTime(elapsed);
+        
+        // Update video frame displays
+        videoObjects.forEach((obj: any) => {
+          if (obj.videoElement && elapsed <= obj.videoDuration) {
+            obj.videoElement.currentTime = elapsed;
+          }
+        });
         
         if (elapsed >= maxDuration) {
           setCurrentTime(0);
           setIsPlaying(false);
           clearInterval(interval);
+          
+          // Reset all videos
+          videoObjects.forEach((obj: any) => {
+            if (obj.videoElement) {
+              obj.videoElement.pause();
+              obj.videoElement.currentTime = 0;
+            }
+          });
         }
       }, 100);
+    } else {
+      // Pause all videos
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.pause();
+        }
+      });
     }
   };
 
@@ -759,7 +799,7 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
           </div>
 
           {/* Video Playback Controls - Only show if video elements exist */}
-          {hasVideoElements() && maxDuration > 0 && (
+          {hasVideoElements() && (
               <div className="bg-card p-4 rounded-xl border border-border">
                 <h3 className="text-sm font-semibold mb-3">Video Preview</h3>
                 <div className="space-y-3">
@@ -787,21 +827,9 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
                   <div className="w-full bg-muted rounded h-1">
                     <div 
                       className="bg-primary h-1 rounded transition-all duration-100"
-                      style={{ width: `${(currentTime / maxDuration) * 100}%` }}
+                      style={{ width: `${maxDuration > 0 ? (currentTime / maxDuration) * 100 : 0}%` }}
                     />
                   </div>
-                  {videoElements.length > 0 && (
-                    <div className="mt-3 space-y-1">
-                      <p className="text-xs text-muted-foreground">
-                        📹 {videoElements.length} video element(s)
-                      </p>
-                      {videoElements.map((video, index) => (
-                        <div key={index} className="text-xs text-muted-foreground bg-muted/50 p-1 rounded">
-                          {video.originalFileName} ({video.duration?.toFixed(1)}s)
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             )}

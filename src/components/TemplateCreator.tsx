@@ -270,18 +270,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           return;
         }
 
-        // Create a video canvas element that can be resized like an image
-        const videoCanvas = document.createElement('canvas');
-        videoCanvas.width = video.videoWidth;
-        videoCanvas.height = video.videoHeight;
-        const ctx = videoCanvas.getContext('2d');
-        
-        // Draw first frame
+        // Create a video element for playback
+        video.muted = true;
+        video.loop = false;
         video.currentTime = 0;
+        
+        // Create fabric image from video first frame
         video.oncanplaythrough = () => {
+          const videoCanvas = document.createElement('canvas');
+          videoCanvas.width = video.videoWidth;
+          videoCanvas.height = video.videoHeight;
+          const ctx = videoCanvas.getContext('2d');
           ctx?.drawImage(video, 0, 0);
           
-          // Create fabric image from video canvas
           FabricImage.fromURL(videoCanvas.toDataURL()).then((img: any) => {
             img.set({ 
               left: 50, 
@@ -290,13 +291,14 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
               scaleY: 0.3 
             });
             
-            // Store video metadata on the fabric object
+            // Store video metadata and element for playback
             const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
             img.videoId = videoId;
             img.originalFileName = file.name;
             img.isVideo = true;
             img.videoDuration = video.duration;
             img.videoUrl = videoUrl;
+            img.videoElement = video; // Store actual video element for playback
             
             // Store the file for later upload
             setPendingVideoUploads(prev => ({
@@ -533,22 +535,59 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     return fabricCanvas.getObjects().some((obj: any) => obj.isVideo);
   };
 
-  // Video playback controls
+  // Video playback controls - sync all video elements
   const togglePlayback = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying) {
-      // Start playback animation
-      const startTime = Date.now();
+    if (!fabricCanvas) return;
+    
+    const videoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo);
+    if (videoObjects.length === 0) return;
+    
+    const newIsPlaying = !isPlaying;
+    setIsPlaying(newIsPlaying);
+    
+    if (newIsPlaying) {
+      // Start all videos
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.currentTime = currentTime;
+          obj.videoElement.play().catch(console.error);
+        }
+      });
+      
+      // Start playback timer
+      const startTime = Date.now() - (currentTime * 1000);
       const interval = setInterval(() => {
         const elapsed = (Date.now() - startTime) / 1000;
         setCurrentTime(elapsed);
+        
+        // Update video frame displays
+        videoObjects.forEach((obj: any) => {
+          if (obj.videoElement && elapsed <= obj.videoDuration) {
+            obj.videoElement.currentTime = elapsed;
+          }
+        });
         
         if (elapsed >= maxDuration) {
           setCurrentTime(0);
           setIsPlaying(false);
           clearInterval(interval);
+          
+          // Reset all videos
+          videoObjects.forEach((obj: any) => {
+            if (obj.videoElement) {
+              obj.videoElement.pause();
+              obj.videoElement.currentTime = 0;
+            }
+          });
         }
       }, 100);
+    } else {
+      // Pause all videos
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.pause();
+        }
+      });
     }
   };
 
@@ -973,8 +1012,8 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                   </div>
                 )}
 
-                {/* Video Playback Controls - Only for video templates */}
-                {templateType === 'video' && maxDuration > 0 && (
+                 {/* Video Playback Controls - Only show if there are video elements */}
+                {hasVideoElements() && (
                   <div className="bg-card p-4 rounded-xl border border-border">
                     <h3 className="text-sm font-semibold mb-3">Video Preview</h3>
                     <div className="space-y-3">
@@ -1002,7 +1041,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                       <div className="w-full bg-muted rounded h-1">
                         <div 
                           className="bg-primary h-1 rounded transition-all duration-100"
-                          style={{ width: `${(currentTime / maxDuration) * 100}%` }}
+                          style={{ width: `${maxDuration > 0 ? (currentTime / maxDuration) * 100 : 0}%` }}
                         />
                       </div>
                     </div>
