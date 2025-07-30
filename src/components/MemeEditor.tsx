@@ -175,10 +175,58 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
           break;
 
         case 'video':
-          // Video elements are handled separately for preview
+          // Create video element as canvas object (similar to image)
           if (elementData.videoUrl) {
-            setVideoElements(prev => [...prev, elementData]);
-            setMaxDuration(prev => Math.max(prev, elementData.duration || 0));
+            try {
+              // Create a canvas to show video preview
+              const video = document.createElement('video');
+              video.src = elementData.videoUrl;
+              video.crossOrigin = 'anonymous';
+              
+              video.onloadeddata = () => {
+                const videoCanvas = document.createElement('canvas');
+                videoCanvas.width = video.videoWidth || 400;
+                videoCanvas.height = video.videoHeight || 300;
+                const ctx = videoCanvas.getContext('2d');
+                
+                // Draw first frame
+                video.currentTime = 0;
+                video.oncanplaythrough = () => {
+                  ctx?.drawImage(video, 0, 0);
+                  
+                  // Create fabric image from video frame
+                  FabricImage.fromURL(videoCanvas.toDataURL(), { crossOrigin: 'anonymous' }).then((img: any) => {
+                    img.set({
+                      left: elementData.x || 0,
+                      top: elementData.y || 0,
+                      crossOrigin: 'anonymous'
+                    });
+                    
+                    // Scale to EXACT dimensions
+                    if (elementData.width && elementData.height) {
+                      const scaleX = elementData.width / (img.width || 1);
+                      const scaleY = elementData.height / (img.height || 1);
+                      img.set({
+                        scaleX: scaleX,
+                        scaleY: scaleY
+                      });
+                    }
+                    
+                    // Mark as video element
+                    img.isVideo = true;
+                    img.videoDuration = elementData.duration;
+                    img.videoUrl = elementData.videoUrl;
+                    img.originalFileName = elementData.originalFileName;
+                    
+                    fabricCanvas.add(img);
+                    setMaxDuration(prev => Math.max(prev, elementData.duration || 0));
+                  });
+                };
+              };
+            } catch (error) {
+              console.error('Error loading video element:', error);
+              toast.error(`Failed to load video: ${elementData.videoUrl}`);
+            }
           }
           break;
 
@@ -341,6 +389,12 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
       setFont(selectedObject.fontFamily || FONT_OPTIONS[0]);
     }
   }, [selectedObject]);
+
+  // Check if canvas has video elements
+  const hasVideoElements = () => {
+    if (!fabricCanvas) return false;
+    return fabricCanvas.getObjects().some((obj: any) => obj.isVideo);
+  };
 
   // Multi-image upload handler
   const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -538,13 +592,22 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     toast.success("Canvas reset to original template!");
   };
 
-  // FIX: Enhanced download function with proper error handling for CORS issues
+  // Download meme - image if no video elements, video if video elements exist
   const downloadMeme = async () => {
     if (!fabricCanvas) {
       toast.error("Canvas not ready");
       return;
     }
 
+    const hasVideos = hasVideoElements();
+    
+    if (hasVideos) {
+      // For canvases with video elements, download as video
+      toast.info("Video download will be implemented with video rendering");
+      return;
+    }
+
+    // For canvases without video elements, download as image
     try {
       // Wait for all images to be fully loaded
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -695,8 +758,8 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
               )}
           </div>
 
-          {/* Video Playback Controls - Only for video templates */}
-          {template.type === 'video' && maxDuration > 0 && (
+          {/* Video Playback Controls - Only show if video elements exist */}
+          {hasVideoElements() && maxDuration > 0 && (
               <div className="bg-card p-4 rounded-xl border border-border">
                 <h3 className="text-sm font-semibold mb-3">Video Preview</h3>
                 <div className="space-y-3">

@@ -247,7 +247,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     e.target.value = "";
   };
 
-  // Multi-video upload handler - Store files locally, don't upload to Supabase yet
+  // Multi-video upload handler - Add videos as canvas elements like images
   const handleVideosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || !fabricCanvas) return;
@@ -270,37 +270,50 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           return;
         }
 
-        // Create video element for canvas
-        const videoElement = {
-          type: 'video',
-          videoUrl: videoUrl,
-          duration: video.duration,
-          width: video.videoWidth,
-          height: video.videoHeight,
-          x: 50,
-          y: 50,
-          scaleX: 0.3,
-          scaleY: 0.3,
-          originalFileName: file.name
+        // Create a video canvas element that can be resized like an image
+        const videoCanvas = document.createElement('canvas');
+        videoCanvas.width = video.videoWidth;
+        videoCanvas.height = video.videoHeight;
+        const ctx = videoCanvas.getContext('2d');
+        
+        // Draw first frame
+        video.currentTime = 0;
+        video.oncanplaythrough = () => {
+          ctx?.drawImage(video, 0, 0);
+          
+          // Create fabric image from video canvas
+          FabricImage.fromURL(videoCanvas.toDataURL()).then((img: any) => {
+            img.set({ 
+              left: 50, 
+              top: 50, 
+              scaleX: 0.3, 
+              scaleY: 0.3 
+            });
+            
+            // Store video metadata on the fabric object
+            const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+            img.videoId = videoId;
+            img.originalFileName = file.name;
+            img.isVideo = true;
+            img.videoDuration = video.duration;
+            img.videoUrl = videoUrl;
+            
+            // Store the file for later upload
+            setPendingVideoUploads(prev => ({
+              ...prev,
+              [videoId]: file
+            }));
+            
+            fabricCanvas.add(img);
+            fabricCanvas.setActiveObject(img);
+            setElements([...fabricCanvas.getObjects()]);
+            
+            // Update max duration for playback
+            setMaxDuration(prev => Math.max(prev, video.duration));
+            
+            toast.success(`Video ${file.name} added to canvas (${video.duration.toFixed(1)}s)`);
+          });
         };
-
-        // Store original file and filename for later upload
-        const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-        (videoElement as any).videoId = videoId;
-        
-        // Store the file for later upload
-        setPendingVideoUploads(prev => ({
-          ...prev,
-          [videoId]: file
-        }));
-
-        // Add to video elements list
-        setVideoElements(prev => [...prev, videoElement]);
-        
-        // Update max duration
-        setMaxDuration(prev => Math.max(prev, video.duration));
-        
-        toast.success(`Video ${file.name} added (${video.duration.toFixed(1)}s)`);
       };
 
       video.src = videoUrl;
@@ -378,6 +391,22 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         });
       }
       
+      // Remove from pending uploads if it's a video
+      if (selectedObject.videoId) {
+        setPendingVideoUploads(prev => {
+          const updated = { ...prev };
+          delete updated[selectedObject.videoId];
+          return updated;
+        });
+        
+        // Recalculate max duration
+        const remainingVideoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo && obj !== selectedObject);
+        const newMaxDuration = remainingVideoObjects.length > 0 
+          ? Math.max(...remainingVideoObjects.map((obj: any) => obj.videoDuration))
+          : 0;
+        setMaxDuration(newMaxDuration);
+      }
+      
       fabricCanvas.remove(selectedObject);
       setSelectedObject(null);
       fabricCanvas.discardActiveObject();
@@ -386,11 +415,8 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     }
   };
 
-  // Delete video element
+  // Delete video element - Now handled by canvas object deletion
   const handleDeleteVideo = (videoId: string) => {
-    // Remove from video elements
-    setVideoElements(prev => prev.filter(v => v.videoId !== videoId));
-    
     // Remove from pending uploads
     setPendingVideoUploads(prev => {
       const updated = { ...prev };
@@ -398,10 +424,10 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       return updated;
     });
 
-    // Recalculate max duration
-    const remainingVideos = videoElements.filter(v => v.videoId !== videoId);
-    const newMaxDuration = remainingVideos.length > 0 
-      ? Math.max(...remainingVideos.map(v => v.duration))
+    // Recalculate max duration from all video objects on canvas
+    const videoObjects = fabricCanvas?.getObjects().filter((obj: any) => obj.isVideo) || [];
+    const newMaxDuration = videoObjects.length > 0 
+      ? Math.max(...videoObjects.map((obj: any) => obj.videoDuration))
       : 0;
     setMaxDuration(newMaxDuration);
   };
@@ -501,6 +527,12 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     fabricCanvas.setActiveObject(circle);
   };
 
+  // Check if canvas has video elements
+  const hasVideoElements = () => {
+    if (!fabricCanvas) return false;
+    return fabricCanvas.getObjects().some((obj: any) => obj.isVideo);
+  };
+
   // Video playback controls
   const togglePlayback = () => {
     setIsPlaying(!isPlaying);
@@ -520,16 +552,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     }
   };
 
-  // FIXED: Download with scaled up dimensions (original reel size) or video
+  // Download meme - image if no video elements, video if video elements exist
   const downloadMeme = () => {
     if (!fabricCanvas) return;
 
-    if (templateType === 'video') {
-      // For video templates, we need to create a video file
+    const hasVideos = hasVideoElements();
+    
+    if (hasVideos) {
+      // For canvases with video elements, download as video
       toast.info("Video download will be implemented with video rendering");
       return;
     }
 
+    // For canvases without video elements, download as image
     try {
       const originalDimensions = getOriginalDimensions();
       const currentDimensions = getCanvasDimensions();
@@ -677,7 +712,19 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           element.color = (obj as any).fill || '#000000';
         } else if (obj.type === 'image') {
           const imageId = (obj as any).imageId;
-          element.imageUrl = imageUrlMapping[imageId] || '';
+          const videoId = (obj as any).videoId;
+          
+          if ((obj as any).isVideo) {
+            // Handle video elements stored as images
+            element.type = 'video';
+            element.videoUrl = videoUrlMapping[videoId] || (obj as any).videoUrl;
+            element.duration = (obj as any).videoDuration;
+            element.originalFileName = (obj as any).originalFileName;
+          } else {
+            // Handle regular images
+            element.imageUrl = imageUrlMapping[imageId] || '';
+          }
+          
           element.originalWidth = (obj as any).width || actualDimensions.width;
           element.originalHeight = (obj as any).height || actualDimensions.height;
         } else if (obj.type === 'rect') {
@@ -696,18 +743,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         return element;
       });
 
-      // Add video elements to layout definition
-      const videoElementsForSave = videoElements.map((video, index) => ({
-        id: `video_element_${index + 1}`,
-        type: 'video',
-        x: video.x,
-        y: video.y,
-        width: video.width * video.scaleX,
-        height: video.height * video.scaleY,
-        videoUrl: videoUrlMapping[video.videoId] || video.videoUrl,
-        duration: video.duration,
-        originalFileName: video.originalFileName
-      }));
+      // Video elements are now saved with other elements above
 
       // FIXED: Save with current canvas dimensions (smaller video canvas)
       const canvasDimensions = getCanvasDimensions();
@@ -718,7 +754,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
           backgroundColor: typeof fabricCanvas.backgroundColor === 'string' ? fabricCanvas.backgroundColor : getCanvasBackgroundColor(),
           backgroundImage: null
         },
-        elements: [...elements, ...videoElementsForSave],
+        elements: elements,
         maxDuration: templateType === 'video' ? maxDuration : undefined
       };
 
@@ -749,7 +785,6 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       setAdminPassword("");
       setPendingImageUploads({});
       setPendingVideoUploads({});
-      setVideoElements([]);
       setMaxDuration(0);
       
     } catch (error) {
@@ -930,25 +965,10 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
                     <p className="text-xs text-muted-foreground mt-1">
                       Max 50 seconds, Max 40MB per video
                     </p>
-                    {videoElements.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-xs text-muted-foreground">
-                          📹 {videoElements.length} video(s) ready | Duration: {maxDuration.toFixed(1)}s
-                        </p>
-                        {videoElements.map((video, index) => (
-                          <div key={video.videoId} className="flex items-center justify-between bg-muted/50 p-2 rounded text-xs">
-                            <span>{video.originalFileName} ({video.duration.toFixed(1)}s)</span>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => handleDeleteVideo(video.videoId)}
-                              className="h-6 w-6 p-0"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
+                    {Object.keys(pendingVideoUploads).length > 0 && (
+                      <p className="text-xs text-muted-foreground mt-2">
+                        📹 {Object.keys(pendingVideoUploads).length} video(s) ready
+                      </p>
                     )}
                   </div>
                 )}
