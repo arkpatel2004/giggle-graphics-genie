@@ -70,13 +70,14 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
   const [color, setColor] = useState("#000000");
   const [font, setFont] = useState(FONT_OPTIONS[0]);
   const [elements, setElements] = useState<any[]>([]);
-  const [pendingImageUploads, setPendingImageUploads] = useState<{[key: string]: File}>({});
-  const [originalTemplateData, setOriginalTemplateData] = useState<any>(null);
-  const [canvasDimensions, setCanvasDimensions] = useState({ width: 400, height: 400 });
-  const [videoElements, setVideoElements] = useState<any[]>([]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [maxDuration, setMaxDuration] = useState(0);
+   const [pendingImageUploads, setPendingImageUploads] = useState<{[key: string]: File}>({});
+   const [pendingVideoUploads, setPendingVideoUploads] = useState<{[key: string]: File}>({});
+   const [originalTemplateData, setOriginalTemplateData] = useState<any>(null);
+   const [canvasDimensions, setCanvasDimensions] = useState({ width: 400, height: 400 });
+   const [videoElements, setVideoElements] = useState<any[]>([]);
+   const [isPlaying, setIsPlaying] = useState(false);
+   const [currentTime, setCurrentTime] = useState(0);
+   const [maxDuration, setMaxDuration] = useState(0);
 
   // DnD-kit setup
   const sensors = useSensors(useSensor(PointerSensor));
@@ -399,6 +400,171 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     return fabricCanvas.getObjects().some((obj: any) => obj.isVideo);
   };
 
+  // Video playback controls - sync all video elements
+  const togglePlayback = () => {
+    if (!fabricCanvas) return;
+    
+    const videoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo);
+    if (videoObjects.length === 0) return;
+    
+    const newIsPlaying = !isPlaying;
+    setIsPlaying(newIsPlaying);
+    
+    if (newIsPlaying) {
+      // Play all video elements
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.currentTime = currentTime;
+          obj.videoElement.play().catch(console.error);
+        }
+      });
+      
+      // Start playback timer
+      const interval = setInterval(() => {
+        setCurrentTime(prev => {
+          const newTime = prev + 0.1;
+          if (newTime >= maxDuration) {
+            setIsPlaying(false);
+            videoObjects.forEach((obj: any) => {
+              if (obj.videoElement) {
+                obj.videoElement.pause();
+                obj.videoElement.currentTime = 0;
+              }
+            });
+            clearInterval(interval);
+            return 0;
+          }
+          
+          // Update video frames
+          videoObjects.forEach((obj: any) => {
+            if (obj.videoElement && newTime <= obj.videoDuration) {
+              obj.videoElement.currentTime = newTime;
+              
+              // Update canvas with current video frame
+              const videoCanvas = document.createElement('canvas');
+              videoCanvas.width = obj.videoElement.videoWidth;
+              videoCanvas.height = obj.videoElement.videoHeight;
+              const ctx = videoCanvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(obj.videoElement, 0, 0);
+                
+                // Update the fabric image with new frame
+                FabricImage.fromURL(videoCanvas.toDataURL()).then((newImg: any) => {
+                  const oldProps = {
+                    left: obj.left,
+                    top: obj.top,
+                    scaleX: obj.scaleX,
+                    scaleY: obj.scaleY,
+                    angle: obj.angle
+                  };
+                  
+                  fabricCanvas.remove(obj);
+                  newImg.set(oldProps);
+                  newImg.videoId = obj.videoId;
+                  newImg.originalFileName = obj.originalFileName;
+                  newImg.isVideo = true;
+                  newImg.videoDuration = obj.videoDuration;
+                  newImg.videoUrl = obj.videoUrl;
+                  newImg.videoElement = obj.videoElement;
+                  
+                  fabricCanvas.add(newImg);
+                  fabricCanvas.renderAll();
+                });
+              }
+            }
+          });
+          
+          return newTime;
+        });
+      }, 100);
+    } else {
+      // Pause all videos
+      videoObjects.forEach((obj: any) => {
+        if (obj.videoElement) {
+          obj.videoElement.pause();
+        }
+      });
+    }
+  };
+
+  // Multi-video upload handler - Add videos as canvas elements like images
+  const handleVideosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || !fabricCanvas) return;
+
+    Array.from(files).forEach((file) => {
+      // Validate video file size (40MB max)
+      if (file.size > 40 * 1024 * 1024) {
+        toast.error(`Video ${file.name} is too large. Maximum size is 40MB.`);
+        return;
+      }
+
+      const video = document.createElement('video');
+      const videoUrl = URL.createObjectURL(file);
+      
+      video.onloadedmetadata = () => {
+        // Validate video duration (50 seconds max)
+        if (video.duration > 50) {
+          toast.error(`Video ${file.name} is too long. Maximum duration is 50 seconds.`);
+          URL.revokeObjectURL(videoUrl);
+          return;
+        }
+
+        // Create a video element for playback
+        video.muted = true;
+        video.loop = false;
+        video.currentTime = 0;
+        
+        // Wait for video to be ready and create only one fabric element
+        video.addEventListener('canplaythrough', () => {
+          const videoCanvas = document.createElement('canvas');
+          videoCanvas.width = video.videoWidth;
+          videoCanvas.height = video.videoHeight;
+          const ctx = videoCanvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0);
+            
+            FabricImage.fromURL(videoCanvas.toDataURL()).then((img: any) => {
+              img.set({ 
+                left: 50, 
+                top: 50, 
+                scaleX: 0.3, 
+                scaleY: 0.3 
+              });
+              
+              // Store video metadata and element for playback
+              const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+              img.videoId = videoId;
+              img.originalFileName = file.name;
+              img.isVideo = true;
+              img.videoDuration = video.duration;
+              img.videoUrl = videoUrl;
+              img.videoElement = video; // Store actual video element for playback
+              
+              // Store the file for later upload
+              setPendingVideoUploads(prev => ({
+                ...prev,
+                [videoId]: file
+              }));
+              
+              fabricCanvas.add(img);
+              fabricCanvas.setActiveObject(img);
+              setElements([...fabricCanvas.getObjects()]);
+              
+              // Update max duration for playback
+              setMaxDuration(prev => Math.max(prev, video.duration));
+              
+              toast.success(`Video ${file.name} added to canvas (${video.duration.toFixed(1)}s)`);
+            });
+          }
+        }, { once: true }); // Use once: true to prevent multiple calls
+      };
+
+      video.src = videoUrl;
+    });
+    e.target.value = "";
+  };
+
   // Multi-image upload handler
   const handleImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -445,14 +611,30 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
   // Delete selected object
   const handleDelete = () => {
     if (fabricCanvas && selectedObject) {
-      // Remove from pending uploads if it's an image
-      if (selectedObject.imageId) {
-        setPendingImageUploads(prev => {
-          const updated = { ...prev };
-          delete updated[selectedObject.imageId];
-          return updated;
-        });
-      }
+       // Remove from pending uploads if it's an image
+       if (selectedObject.imageId) {
+         setPendingImageUploads(prev => {
+           const updated = { ...prev };
+           delete updated[selectedObject.imageId];
+           return updated;
+         });
+       }
+       
+       // Remove from pending uploads if it's a video
+       if (selectedObject.videoId) {
+         setPendingVideoUploads(prev => {
+           const updated = { ...prev };
+           delete updated[selectedObject.videoId];
+           return updated;
+         });
+         
+         // Recalculate max duration
+         const remainingVideoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo && obj !== selectedObject);
+         const newMaxDuration = remainingVideoObjects.length > 0 
+           ? Math.max(...remainingVideoObjects.map((obj: any) => obj.videoDuration))
+           : 0;
+         setMaxDuration(newMaxDuration);
+       }
       
       fabricCanvas.remove(selectedObject);
       setSelectedObject(null);
@@ -560,61 +742,6 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     toast.success("Circle added!");
   };
 
-  // Video playback controls - sync all video elements
-  const togglePlayback = () => {
-    if (!fabricCanvas) return;
-    
-    const videoObjects = fabricCanvas.getObjects().filter((obj: any) => obj.isVideo);
-    if (videoObjects.length === 0) return;
-    
-    const newIsPlaying = !isPlaying;
-    setIsPlaying(newIsPlaying);
-    
-    if (newIsPlaying) {
-      // Start all videos
-      videoObjects.forEach((obj: any) => {
-        if (obj.videoElement) {
-          obj.videoElement.currentTime = currentTime;
-          obj.videoElement.play().catch(console.error);
-        }
-      });
-      
-      // Start playback timer
-      const startTime = Date.now() - (currentTime * 1000);
-      const interval = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        setCurrentTime(elapsed);
-        
-        // Update video frame displays
-        videoObjects.forEach((obj: any) => {
-          if (obj.videoElement && elapsed <= obj.videoDuration) {
-            obj.videoElement.currentTime = elapsed;
-          }
-        });
-        
-        if (elapsed >= maxDuration) {
-          setCurrentTime(0);
-          setIsPlaying(false);
-          clearInterval(interval);
-          
-          // Reset all videos
-          videoObjects.forEach((obj: any) => {
-            if (obj.videoElement) {
-              obj.videoElement.pause();
-              obj.videoElement.currentTime = 0;
-            }
-          });
-        }
-      }, 100);
-    } else {
-      // Pause all videos
-      videoObjects.forEach((obj: any) => {
-        if (obj.videoElement) {
-          obj.videoElement.pause();
-        }
-      });
-    }
-  };
 
   const clearCanvas = () => {
     if (!fabricCanvas || !originalTemplateData) return;
@@ -622,10 +749,11 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
     // Clear canvas
     fabricCanvas.clear();
     
-    // Clear pending uploads
-    setPendingImageUploads({});
-    setVideoElements([]);
-    setMaxDuration(0);
+     // Clear pending uploads
+     setPendingImageUploads({});
+     setPendingVideoUploads({});
+     setVideoElements([]);
+     setMaxDuration(0);
     
     // Reload original template data
     loadTemplateData();
@@ -772,31 +900,57 @@ export const MemeEditor = ({ template, onBack }: MemeEditorProps) => {
             </div>
           </div>
 
-          {/* Upload Images */}
-          <div className="bg-card p-4 rounded-xl border border-border">
-            <h3 className="text-sm font-semibold mb-3">Upload Images</h3>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleImagesUpload}
-              className="hidden"
-              id="image-upload"
-            />
-            <label htmlFor="image-upload">
-              <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
-                <span>
-                  <Upload className="w-4 h-4 mr-2" />
-                  Add Images
-                </span>
-              </Button>
-            </label>
-              {Object.keys(pendingImageUploads).length > 0 && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  📎 {Object.keys(pendingImageUploads).length} image(s) ready
-                </p>
-              )}
-          </div>
+           {/* Upload Images */}
+           <div className="bg-card p-4 rounded-xl border border-border">
+             <h3 className="text-sm font-semibold mb-3">Upload Images</h3>
+             <input
+               type="file"
+               accept="image/*"
+               multiple
+               onChange={handleImagesUpload}
+               className="hidden"
+               id="image-upload"
+             />
+             <label htmlFor="image-upload">
+               <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
+                 <span>
+                   <Upload className="w-4 h-4 mr-2" />
+                   Add Images
+                 </span>
+               </Button>
+             </label>
+               {Object.keys(pendingImageUploads).length > 0 && (
+                 <p className="text-xs text-muted-foreground mt-2">
+                   📎 {Object.keys(pendingImageUploads).length} image(s) ready
+                 </p>
+               )}
+           </div>
+
+           {/* Upload Videos - Only for video templates */}
+           {template.type === 'video' && (
+             <div className="bg-card p-4 rounded-xl border border-border">
+               <h3 className="text-sm font-semibold mb-3">Upload Videos</h3>
+               <input
+                 type="file"
+                 accept="video/*"
+                 multiple
+                 onChange={handleVideosUpload}
+                 className="hidden"
+                 id="video-upload"
+               />
+               <label htmlFor="video-upload">
+                 <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
+                   <span>
+                     <Video className="w-4 h-4 mr-2" />
+                     Add Videos
+                   </span>
+                 </Button>
+               </label>
+               <p className="text-xs text-muted-foreground mt-1">
+                 Max 50 seconds, Max 40MB per video
+               </p>
+             </div>
+           )}
 
           {/* Video Playback Controls - Only show if video elements exist */}
           {hasVideoElements() && (

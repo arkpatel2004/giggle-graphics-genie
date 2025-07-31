@@ -275,47 +275,49 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
         video.loop = false;
         video.currentTime = 0;
         
-        // Create fabric image from video first frame
-        video.oncanplaythrough = () => {
+        // Wait for video to be ready and create only one fabric element
+        video.addEventListener('canplaythrough', () => {
           const videoCanvas = document.createElement('canvas');
           videoCanvas.width = video.videoWidth;
           videoCanvas.height = video.videoHeight;
           const ctx = videoCanvas.getContext('2d');
-          ctx?.drawImage(video, 0, 0);
-          
-          FabricImage.fromURL(videoCanvas.toDataURL()).then((img: any) => {
-            img.set({ 
-              left: 50, 
-              top: 50, 
-              scaleX: 0.3, 
-              scaleY: 0.3 
+          if (ctx) {
+            ctx.drawImage(video, 0, 0);
+            
+            FabricImage.fromURL(videoCanvas.toDataURL()).then((img: any) => {
+              img.set({ 
+                left: 50, 
+                top: 50, 
+                scaleX: 0.3, 
+                scaleY: 0.3 
+              });
+              
+              // Store video metadata and element for playback
+              const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+              img.videoId = videoId;
+              img.originalFileName = file.name;
+              img.isVideo = true;
+              img.videoDuration = video.duration;
+              img.videoUrl = videoUrl;
+              img.videoElement = video; // Store actual video element for playback
+              
+              // Store the file for later upload
+              setPendingVideoUploads(prev => ({
+                ...prev,
+                [videoId]: file
+              }));
+              
+              fabricCanvas.add(img);
+              fabricCanvas.setActiveObject(img);
+              setElements([...fabricCanvas.getObjects()]);
+              
+              // Update max duration for playback
+              setMaxDuration(prev => Math.max(prev, video.duration));
+              
+              toast.success(`Video ${file.name} added to canvas (${video.duration.toFixed(1)}s)`);
             });
-            
-            // Store video metadata and element for playback
-            const videoId = `video_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-            img.videoId = videoId;
-            img.originalFileName = file.name;
-            img.isVideo = true;
-            img.videoDuration = video.duration;
-            img.videoUrl = videoUrl;
-            img.videoElement = video; // Store actual video element for playback
-            
-            // Store the file for later upload
-            setPendingVideoUploads(prev => ({
-              ...prev,
-              [videoId]: file
-            }));
-            
-            fabricCanvas.add(img);
-            fabricCanvas.setActiveObject(img);
-            setElements([...fabricCanvas.getObjects()]);
-            
-            // Update max duration for playback
-            setMaxDuration(prev => Math.max(prev, video.duration));
-            
-            toast.success(`Video ${file.name} added to canvas (${video.duration.toFixed(1)}s)`);
-          });
-        };
+          }
+        }, { once: true }); // Use once: true to prevent multiple calls
       };
 
       video.src = videoUrl;
@@ -546,7 +548,7 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
     setIsPlaying(newIsPlaying);
     
     if (newIsPlaying) {
-      // Start all videos
+      // Play all video elements
       videoObjects.forEach((obj: any) => {
         if (obj.videoElement) {
           obj.videoElement.currentTime = currentTime;
@@ -555,31 +557,62 @@ export const TemplateCreator = ({ onClose }: TemplateCreatorProps) => {
       });
       
       // Start playback timer
-      const startTime = Date.now() - (currentTime * 1000);
       const interval = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        setCurrentTime(elapsed);
-        
-        // Update video frame displays
-        videoObjects.forEach((obj: any) => {
-          if (obj.videoElement && elapsed <= obj.videoDuration) {
-            obj.videoElement.currentTime = elapsed;
+        setCurrentTime(prev => {
+          const newTime = prev + 0.1;
+          if (newTime >= maxDuration) {
+            setIsPlaying(false);
+            videoObjects.forEach((obj: any) => {
+              if (obj.videoElement) {
+                obj.videoElement.pause();
+                obj.videoElement.currentTime = 0;
+              }
+            });
+            clearInterval(interval);
+            return 0;
           }
-        });
-        
-        if (elapsed >= maxDuration) {
-          setCurrentTime(0);
-          setIsPlaying(false);
-          clearInterval(interval);
           
-          // Reset all videos
+          // Update video frames
           videoObjects.forEach((obj: any) => {
-            if (obj.videoElement) {
-              obj.videoElement.pause();
-              obj.videoElement.currentTime = 0;
+            if (obj.videoElement && newTime <= obj.videoDuration) {
+              obj.videoElement.currentTime = newTime;
+              
+              // Update canvas with current video frame
+              const videoCanvas = document.createElement('canvas');
+              videoCanvas.width = obj.videoElement.videoWidth;
+              videoCanvas.height = obj.videoElement.videoHeight;
+              const ctx = videoCanvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(obj.videoElement, 0, 0);
+                
+                // Update the fabric image with new frame
+                FabricImage.fromURL(videoCanvas.toDataURL()).then((newImg: any) => {
+                  const oldProps = {
+                    left: obj.left,
+                    top: obj.top,
+                    scaleX: obj.scaleX,
+                    scaleY: obj.scaleY,
+                    angle: obj.angle
+                  };
+                  
+                  fabricCanvas.remove(obj);
+                  newImg.set(oldProps);
+                  newImg.videoId = obj.videoId;
+                  newImg.originalFileName = obj.originalFileName;
+                  newImg.isVideo = true;
+                  newImg.videoDuration = obj.videoDuration;
+                  newImg.videoUrl = obj.videoUrl;
+                  newImg.videoElement = obj.videoElement;
+                  
+                  fabricCanvas.add(newImg);
+                  fabricCanvas.renderAll();
+                });
+              }
             }
           });
-        }
+          
+          return newTime;
+        });
       }, 100);
     } else {
       // Pause all videos
